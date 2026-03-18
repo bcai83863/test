@@ -20,13 +20,13 @@ logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 # =========================================================
-# 1) 字型修復：強制載入與路徑定義
+# 1) 字型修復
 # =========================================================
 FONT_FILENAME = "NotoSansTC-VariableFont_wght.ttf"
 FONT_PATH = Path(__file__).parent / "assets" / "fonts" / FONT_FILENAME
 
 def _setup_matplotlib_fonts():
-    plt.switch_backend('Agg') # 伺服器環境必備
+    plt.switch_backend('Agg')
     if FONT_PATH.exists():
         try:
             fe = fm.FontEntry(fname=str(FONT_PATH), name='Noto Sans TC')
@@ -35,17 +35,14 @@ def _setup_matplotlib_fonts():
             plt.rcParams['font.sans-serif'] = [fe.name, 'DejaVu Sans']
             plt.rcParams['axes.unicode_minus'] = False
             print(f"✅ 字型載入成功：{FONT_PATH}")
-        except Exception as e:
-            print(f"⚠️ 字型註冊失敗：{e}")
-    else:
-        print(f"❌ 找不到字型檔：{FONT_PATH}")
+        except Exception as e: print(f"⚠️ 字型註冊失敗：{e}")
 
 _setup_matplotlib_fonts()
 
 # =========================================================
-# 2) 報表選單與匯出變數 (✨ 修正：補上 app.py 需要的變數)
+# 2) 報表選單 (Export for app.py)
 # =========================================================
-REPORT_MENU: list[tuple[str, str]] = [
+REPORT_MENU = [
     ("圖1: 累計核發人次趨勢", "figure_01"), ("圖2: 累計持卡人次-按領域分", "figure_02"),
     ("圖3: 累計持卡人次-十大國別", "figure_03"), ("圖4: 累計核發人次-年齡及性別", "figure_04"),
     ("圖5: 有效持卡人次-按領域分", "figure_05"), ("圖6: 有效持卡人次-十大國別", "figure_06"),
@@ -58,12 +55,10 @@ REPORT_MENU: list[tuple[str, str]] = [
     ("表12: 有效許可人次 (有效國別x領域)", "table_12"), ("表13: 有效許可人次 (有效國別x性別)", "table_13"),
     ("表14: 有效許可人次 (有效年齡x性別)", "table_14"),
 ]
-
-# ✨ 這是 app.py 報錯找不到的關鍵變數
 REPORT_LABEL_BY_MODULE = {module: label for label, module in REPORT_MENU}
 
 # =========================================================
-# 3) 模擬器組件 (劫持 Streamlit 並記錄事件)
+# 3) 強化版紀錄器 (帶 Debug Print)
 # =========================================================
 class StreamlitRecorder:
     def __init__(self, requested_ym: str | None = None):
@@ -72,13 +67,14 @@ class StreamlitRecorder:
         self.sidebar = self
 
     def _record(self, kind: str, payload: Any):
+        print(f"🎬 [Recorder] 捕捉到 {kind}: {str(payload)[:50]}...")
         self.events.append((kind, payload))
 
     def title(self, text: Any, **_: Any): self._record("title", str(text))
     def subheader(self, text: Any, **_: Any): self._record("subheader", str(text))
     def markdown(self, text: Any, **_: Any): self._record("markdown", str(text))
     def info(self, text: Any, **_: Any): self._record("info", str(text))
-    def error(self, text: Any, **_: Any): self._record("error", str(text))
+    def warning(self, text: Any, **_: Any): self._record("info", f"⚠️ {text}")
     def success(self, text: Any, **_: Any): self._record("info", f"✅ {text}")
     
     def write(self, *args: Any, **_: Any):
@@ -92,19 +88,18 @@ class StreamlitRecorder:
 
     def dataframe(self, data: Any, **_: Any):
         if hasattr(data, "data"): data = data.data
-        if isinstance(data, pd.DataFrame): self._record("dataframe", data)
+        self._record("dataframe", data)
 
     def table(self, data: Any, **_: Any): self.dataframe(data)
 
     def pyplot(self, fig: Any = None, **_: Any):
-        # 處理 st.pyplot() 不帶參數的情況
         if fig is None or fig is plt or str(type(fig)) == "<class 'module'>":
             fig = plt.gcf()
         if not isinstance(fig, Figure): fig = plt.gcf()
-        
         self._record("pyplot", fig)
         plt.clf()
 
+    # 佈局模擬
     def columns(self, spec, **_): return [self] * (spec if isinstance(spec, int) else len(spec))
     def container(self, **_): return self
     def expander(self, *args, **kwargs): return self
@@ -113,7 +108,7 @@ class StreamlitRecorder:
     def __getattr__(self, name: str): return lambda *args, **kwargs: None
 
 # =========================================================
-# 4) 轉換邏輯：Matplotlib 圖片與 Dash 表格
+# 4) 組件轉換
 # =========================================================
 def _matplotlib_figure_to_data_uri(fig: Figure) -> str:
     if FONT_PATH.exists():
@@ -122,26 +117,24 @@ def _matplotlib_figure_to_data_uri(fig: Figure) -> str:
             ax.title.set_fontproperties(prop)
             ax.xaxis.label.set_fontproperties(prop)
             ax.yaxis.label.set_fontproperties(prop)
-            for label in ax.get_xticklabels() + ax.get_yticklabels():
-                label.set_fontproperties(prop)
-            legend = ax.get_legend()
-            if legend:
-                for text in legend.get_texts(): text.set_fontproperties(prop)
+            for label in ax.get_xticklabels() + ax.get_yticklabels(): label.set_fontproperties(prop)
+            if ax.get_legend():
+                for text in ax.get_legend().get_texts(): text.set_fontproperties(prop)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=140, bbox_inches="tight", facecolor='white')
     buf.seek(0)
-    encoded = base64.b64encode(buf.read()).decode("ascii")
+    img_base64 = base64.b64encode(buf.read()).decode("ascii")
     plt.close(fig)
-    return f"data:image/png;base64,{encoded}"
+    return f"data:image/png;base64,{img_base64}"
 
 def _event_to_component(kind: str, val: Any, idx: int):
-    if kind == "title": return html.H2(val, style={"marginTop": "10px"})
+    if kind == "title": return html.H2(val)
     if kind == "subheader": return html.H4(val, style={"color": "#2c3e50", "marginTop": "20px"})
     if kind == "markdown": return dcc.Markdown(val)
     if kind == "info": return html.Div(val, style={"padding": "12px", "backgroundColor": "#e7f3fe", "borderLeft": "5px solid #2196F3", "marginBottom": "10px"})
     if kind == "dataframe":
-        df = val.copy().fillna("")
+        df = val.copy().fillna("") if isinstance(val, pd.DataFrame) else pd.DataFrame(val)
         return dash_table.DataTable(
             data=df.to_dict("records"),
             columns=[{"name": str(c), "id": str(c)} for c in df.columns],
@@ -156,15 +149,12 @@ def _event_to_component(kind: str, val: Any, idx: int):
     return None
 
 # =========================================================
-# 5) 主渲染入口 (劫持系統模組)
+# 5) 主入口
 # =========================================================
 def render_report_to_dash(module_name: str, data_dir: Path, requested_ym: str | None = None):
-    if str(data_dir) not in sys.path:
-        sys.path.insert(0, str(data_dir))
+    if str(data_dir) not in sys.path: sys.path.insert(0, str(data_dir))
     
     recorder = StreamlitRecorder(requested_ym=requested_ym)
-    
-    # 劫持模組以防報錯
     original_st = sys.modules.get('streamlit')
     sys.modules['streamlit'] = recorder 
 
@@ -172,9 +162,10 @@ def render_report_to_dash(module_name: str, data_dir: Path, requested_ym: str | 
         if module_name in sys.modules: del sys.modules[module_name]
         module = importlib.import_module(module_name)
         module.render_streamlit(data_dir)
+        print(f"✅ 報表 {module_name} 執行完畢，共抓取 {len(recorder.events)} 個事件")
     except Exception as e:
-        LOGGER.exception("模組執行失敗")
-        return [html.Div(f"❌ 報表執行失敗：{e}", style={"color": "red"})]
+        print(f"❌ 執行報表失敗: {e}")
+        return [html.Div(f"執行失敗: {e}", style={"color": "red"})]
     finally:
         if original_st: sys.modules['streamlit'] = original_st
         else: del sys.modules['streamlit']
@@ -184,4 +175,4 @@ def render_report_to_dash(module_name: str, data_dir: Path, requested_ym: str | 
         comp = _event_to_component(kind, val, i)
         if comp: components.append(comp)
     
-    return components if components else [html.Div("⚠️ 報表載入成功但無內容。")]
+    return components if components else [html.Div("⚠️ 報表已執行但無內容產出。請檢查數據路徑。")]
