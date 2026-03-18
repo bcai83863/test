@@ -1,19 +1,19 @@
 import streamlit as st
 from pathlib import Path
 import importlib
-import sys # ✨ 新增：用來處理搜尋路徑
+import sys
+import os # ✨ 新增：用於偵錯檔案是否存在
 
 # =========================================================
-# 1) 自動修正路徑 (最關鍵的一步)
+# 1) 自動修正路徑 (針對雲端環境強化)
 # =========================================================
-# 獲取目前 app.py 所在的資料夾路徑
-current_dir = Path(__file__).parent.absolute()
+# 獲取目前檔案所在的絕對路徑
+current_dir = Path(__file__).parent.resolve()
 
-# 如果目前的資料夾路徑不在 Python 的搜尋清單中，就把它加進去
+# 確保該資料夾在 Python 搜尋路徑的最前面
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
-# 設定資料夾路徑
 DATA_DIR = current_dir 
 
 st.set_page_config(
@@ -23,7 +23,7 @@ st.set_page_config(
 )
 
 # =========================================================
-# 2) 定義報表選單 (維持原樣)
+# 2) 定義報表選單
 # =========================================================
 REPORTS = {
     "--- 📊 趨勢與分佈圖表 ---": None,
@@ -62,16 +62,21 @@ module_name = REPORTS[selected_name]
 
 if module_name:
     try:
-        # ✨ 現在有了 sys.path.insert，這裡一定找得到檔案
+        # ✨ 動態載入
         report_module = importlib.import_module(module_name)
+        # 重新整理後強制重新載入模組，避免快取舊程式碼
+        importlib.reload(report_module)
+        
         report_module.render_streamlit(DATA_DIR)
         
     except ModuleNotFoundError as e:
         st.error(f"❌ 找不到模組檔案: `{module_name}.py`")
-        st.info(f"偵測路徑: `{current_dir}`")
-        st.debug(f"詳細錯誤: {e}")
+        st.info(f"目前工作路徑: `{os.getcwd()}`")
+        st.info(f"偵測到資料夾內檔案: `{os.listdir(current_dir)}`")
+        st.exception(e) # ✨ 修正：將 st.debug 改為 st.exception
     except Exception as e:
-        st.error(f"啟動報表時發生錯誤：{e}")
+        st.error(f"啟動報表時發生錯誤")
+        st.exception(e) # ✨ 修正：將 st.debug 改為 st.exception
 else:
     st.title("歡迎使用就業金卡數據儀表板")
     st.markdown("### 👈 請從左側選單選擇要查看的數據報表")
