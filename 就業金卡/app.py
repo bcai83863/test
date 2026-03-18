@@ -1,33 +1,30 @@
 import streamlit as st
 from pathlib import Path
 import importlib
+import sys # ✨ 新增：用來處理搜尋路徑
 
 # =========================================================
-# 1) 儀表板頁面基本設定
+# 1) 自動修正路徑 (最關鍵的一步)
 # =========================================================
+# 獲取目前 app.py 所在的資料夾路徑
+current_dir = Path(__file__).parent.absolute()
+
+# 如果目前的資料夾路徑不在 Python 的搜尋清單中，就把它加進去
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+
+# 設定資料夾路徑
+DATA_DIR = current_dir 
+
 st.set_page_config(
     page_title="就業金卡數據儀表板",
     page_icon="🏆",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# 自定義 CSS 讓介面更專業
-st.markdown("""
-    <style>
-    .main { background-color: #f8f9fa; }
-    .stTable { background-color: white; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# 定位資料夾路徑
-BASE_DIR = Path(__file__).parent
-DATA_DIR = BASE_DIR # 因為來源 Excel 就在同個資料夾
-
 # =========================================================
-# 2) 定義報表選單
+# 2) 定義報表選單 (維持原樣)
 # =========================================================
-# 這裡定義顯示名稱與對應的檔案名稱 (不含 .py)
 REPORTS = {
     "--- 📊 趨勢與分佈圖表 ---": None,
     "圖1: 累計核發人次趨勢": "figure_01",
@@ -56,46 +53,25 @@ REPORTS = {
 }
 
 # =========================================================
-# 3) 側邊欄導覽設計
+# 3) 側邊欄與載入邏輯
 # =========================================================
 st.sidebar.title("🏆 就業金卡報表系統")
-st.sidebar.markdown("請選擇下方報表進行檢視")
+selected_name = st.sidebar.selectbox("請選擇報表", options=list(REPORTS.keys()), index=1)
 
-selected_name = st.sidebar.selectbox(
-    "報表清單",
-    options=list(REPORTS.keys()),
-    index=1 # 預設選中第一個報表 (圖1)
-)
-
-st.sidebar.divider()
-st.sidebar.info(f"💡 目前偵測資料夾：\n`{BASE_DIR.name}`")
-
-# =========================================================
-# 4) 報表動態載入與渲染
-# =========================================================
 module_name = REPORTS[selected_name]
 
 if module_name:
     try:
-        # 動態匯入選中的模組 (例如：import figure_01)
-        # 這裡假設 app.py 跟所有的 figure_xx.py 在同一個資料夾
+        # ✨ 現在有了 sys.path.insert，這裡一定找得到檔案
         report_module = importlib.import_module(module_name)
-        
-        # 呼叫我們在每一支程式最後寫的渲染入口
         report_module.render_streamlit(DATA_DIR)
         
-    except ModuleNotFoundError:
-        st.error(f"找不到模組檔案: `{module_name}.py`，請確認檔案是否存在。")
+    except ModuleNotFoundError as e:
+        st.error(f"❌ 找不到模組檔案: `{module_name}.py`")
+        st.info(f"偵測路徑: `{current_dir}`")
+        st.debug(f"詳細錯誤: {e}")
     except Exception as e:
         st.error(f"啟動報表時發生錯誤：{e}")
-        st.exception(e) # 顯示更詳細的錯誤資訊供工程師調校
 else:
-    # 如果選到的是分隔線文字
     st.title("歡迎使用就業金卡數據儀表板")
-    st.markdown("""
-    ### 👈 請從左側選單選擇要查看的數據報表
-    本系統會自動讀取資料夾中最新的 Excel 檔案，並即時產出數據分析結果。
-    
-    - **圖表區**：包含累計與有效人次的趨勢、國別與領域分佈。
-    - **表格區**：提供詳細的歷年統計、交叉分析及佔比數據。
-    """)
+    st.markdown("### 👈 請從左側選單選擇要查看的數據報表")
