@@ -6,7 +6,6 @@ import io
 import logging
 import sys
 import warnings
-import platform
 from pathlib import Path
 from typing import Any
 
@@ -17,30 +16,36 @@ from dash import dash_table, dcc, html
 from matplotlib.figure import Figure
 
 # =========================================================
-# 1) 字型修復邏輯 (防止 Linux 環境出現口口字)
+# 1) 字型修復：強制載入與路徑定義
 # =========================================================
-def _setup_matplotlib_fonts():
-    """在伺服器環境手動載入字型檔案"""
-    # 設定繪圖後台為 Agg (非交互式，適合伺服器)
-    plt.switch_backend('Agg')
-    
-    # 定義字型路徑
-    font_path = Path(__file__).parent / "assets" / "fonts" / "NotoSansTC-VariableFont_wght.ttf"
-    
-    if font_path.exists():
-        # 強制插入字型到 Matplotlib
-        fe = fm.FontEntry(fname=str(font_path), name='Noto Sans TC')
-        fm.fontManager.ttflist.insert(0, fe)
-        plt.rcParams['font.family'] = fe.name
-        plt.rcParams['axes.unicode_minus'] = False
-        print(f"✅ 已成功載入字型：{font_path}")
-    else:
-        # 備援方案
-        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'WenQuanYi Zen Hei', 'sans-serif']
-        plt.rcParams['axes.unicode_minus'] = False
-        print(f"⚠️ 找不到字型檔 {font_path}，使用系統備援字型。")
+# 請確保字型檔位於 就業金卡_dash/assets/fonts/ 下
+FONT_FILENAME = "NotoSansTC-VariableFont_wght.ttf"
+FONT_PATH = Path(__file__).parent / "assets" / "fonts" / FONT_FILENAME
 
-# 執行字型初始化
+def _setup_matplotlib_fonts():
+    """初始化繪圖環境與字型"""
+    plt.switch_backend('Agg') # 伺服器環境必備
+    
+    if FONT_PATH.exists():
+        try:
+            # 註冊字型到 Matplotlib 的管理系統
+            fe = fm.FontEntry(fname=str(FONT_PATH), name='Noto Sans TC')
+            fm.fontManager.ttflist.insert(0, fe)
+            
+            # 設定全局字型優先順序
+            plt.rcParams['font.family'] = 'sans-serif'
+            plt.rcParams['font.sans-serif'] = [fe.name, 'DejaVu Sans']
+            plt.rcParams['axes.unicode_minus'] = False # 修復負號顯示
+            print(f"✅ 字型載入成功，路徑：{FONT_PATH}")
+        except Exception as e:
+            print(f"⚠️ 字型註冊失敗：{e}")
+    else:
+        print(f"❌ 找不到字型檔：{FONT_PATH}")
+        # 列出目錄內容供除錯
+        if FONT_PATH.parent.exists():
+            print(f"🔍 目錄內容：{[f.name for f in FONT_PATH.parent.glob('*')]}")
+
+# 執行初始化
 _setup_matplotlib_fonts()
 
 # =========================================================
@@ -77,7 +82,6 @@ LOGGER = logging.getLogger(__name__)
 # 3) Streamlit 指令攔截器 (Recorder)
 # =========================================================
 class StreamlitRecorder:
-    """模擬 st.xxx 指令，將輸出存入 events 串列"""
     def __init__(self, requested_ym: str | None = None):
         self.requested_ym = (requested_ym or "").strip()
         self.events: list[tuple[str, Any]] = []
@@ -85,29 +89,27 @@ class StreamlitRecorder:
     def _record(self, kind: str, payload: Any) -> None:
         self.events.append((kind, payload))
 
-    def subheader(self, text: Any, **_: Any) -> None: self._record("subheader", str(text))
-    def title(self, text: Any, **_: Any) -> None: self._record("title", str(text))
-    def markdown(self, text: Any, **_: Any) -> None: self._record("markdown", str(text))
-    def info(self, text: Any, **_: Any) -> None: self._record("info", str(text))
-    def error(self, text: Any, **_: Any) -> None: self._record("error", str(text))
+    def subheader(self, text: Any, **_: Any): self._record("subheader", str(text))
+    def title(self, text: Any, **_: Any): self._record("title", str(text))
+    def markdown(self, text: Any, **_: Any): self._record("markdown", str(text))
+    def info(self, text: Any, **_: Any): self._record("info", str(text))
+    def error(self, text: Any, **_: Any): self._record("error", str(text))
 
     def text_input(self, label: str, value: str = "", **_: Any) -> str:
-        # 攔截輸入框，優先回傳 Dash 介面傳進來的月份
         return self.requested_ym if self.requested_ym else value
 
-    def dataframe(self, data: Any, **_: Any) -> None:
+    def dataframe(self, data: Any, **_: Any):
         if hasattr(data, "data") and isinstance(data.data, pd.DataFrame): data = data.data
         if isinstance(data, pd.DataFrame): self._record("dataframe", data)
 
-    def pyplot(self, fig: Figure | None = None, **_: Any) -> None:
+    def pyplot(self, fig: Figure | None = None, **_: Any):
         if fig is not None: self._record("pyplot", fig)
 
     def __getattr__(self, name: str):
-        # 忽略所有其他不支援的 Streamlit 指令 (如 st.cache_data)
         return lambda *args, **kwargs: None
 
 # =========================================================
-# 4) 組件轉換工具
+# 4) 組件轉換工具與圖片處理
 # =========================================================
 def _dataframe_to_dash_table(df: pd.DataFrame, table_id: str):
     display_df = df.copy().fillna("")
@@ -125,10 +127,31 @@ def _dataframe_to_dash_table(df: pd.DataFrame, table_id: str):
     )
 
 def _matplotlib_figure_to_data_uri(fig: Figure) -> str:
-    """將畫好的 Matplotlib 圖表轉成 Base64 圖片網址"""
+    """將畫好的圖表轉成 Base64 圖片，並強制套用字型"""
+    # ✨ 終極修復：遍歷圖中所有文字物件並強制指定字型檔
+    if FONT_PATH.exists():
+        prop = fm.FontProperties(fname=str(FONT_PATH))
+        # 處理標題
+        if fig.texts:
+            for t in fig.texts: t.set_fontproperties(prop)
+        
+        # 處理各個坐標軸
+        for ax in fig.get_axes():
+            # 標題與標籤
+            ax.title.set_fontproperties(prop)
+            ax.xaxis.label.set_fontproperties(prop)
+            ax.yaxis.label.set_fontproperties(prop)
+            # 刻度文字
+            for label in ax.get_xticklabels() + ax.get_yticklabels():
+                label.set_fontproperties(prop)
+            # 圖例
+            legend = ax.get_legend()
+            if legend:
+                for text in legend.get_texts():
+                    text.set_fontproperties(prop)
+
     buf = io.BytesIO()
-    # 存檔時強制指定 dpi 與 背景色
-    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor='white')
+    fig.savefig(buf, format="png", dpi=160, bbox_inches="tight", facecolor='white')
     buf.seek(0)
     encoded = base64.b64encode(buf.read()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
@@ -137,7 +160,7 @@ def _event_to_component(event_type: str, payload: Any, idx: int):
     if event_type == "title": return html.H2(payload)
     if event_type == "subheader": return html.H4(payload, style={"color": "#2c3e50"})
     if event_type == "markdown": return dcc.Markdown(payload)
-    if event_type == "info": return html.Div(payload, className="alert alert-info", style={"padding": "10px", "backgroundColor": "#e7f3fe", "borderLeft": "5px solid #2196F3"})
+    if event_type == "info": return html.Div(payload, style={"padding": "10px", "backgroundColor": "#e7f3fe", "borderLeft": "5px solid #2196F3"})
     if event_type == "dataframe": return _dataframe_to_dash_table(payload, f"table-{idx}")
     if event_type == "pyplot":
         src = _matplotlib_figure_to_data_uri(payload)
@@ -145,33 +168,27 @@ def _event_to_component(event_type: str, payload: Any, idx: int):
     return None
 
 # =========================================================
-# 5) 主入口：渲染報表至 Dash
+# 5) 主渲染入口
 # =========================================================
 def render_report_to_dash(module_name: str, data_dir: Path, requested_ym: str | None = None):
-    # 確保模組搜尋路徑正確
     if str(data_dir) not in sys.path: sys.path.insert(0, str(data_dir))
 
     recorder = StreamlitRecorder(requested_ym=requested_ym)
     
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        # 動態載入報表檔案 (例如 figure_01.py)
         module = importlib.import_module(module_name)
         module = importlib.reload(module)
-        
-        # 💉 關鍵注入：將報表內的 st 替換成我們的 recorder
         module.st = recorder
         
-        # 執行報表主程式
         try:
             module.render_streamlit(data_dir)
         except Exception as e:
-            return [html.Div(f"❌ 執行模組出錯：{e}", style={"color": "red"})]
+            return [html.Div(f"❌ 執行報表模組出錯：{e}", style={"color": "red"})]
 
-    # 將紀錄的事件轉為 Dash 組件
     components = []
     for i, (kind, val) in enumerate(recorder.events):
         comp = _event_to_component(kind, val, i)
         if comp: components.append(comp)
     
-    return components if components else [html.Div("⚠️ 此報表目前無可顯示內容")]
+    return components if components else [html.Div("此報表目前無可顯示內容。")]
