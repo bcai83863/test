@@ -4,3 +4,4 @@ openpyxl
 xlrd
 numpy
 streamlit
+altair
