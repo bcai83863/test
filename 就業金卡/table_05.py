@@ -4,7 +4,7 @@ from datetime import datetime, date
 from typing import Tuple
 
 import pandas as pd
-import streamlit as st # ✨ 新增 Streamlit 套件
+import streamlit as st 
 from font_utils import apply_streamlit_cjk_css
 
 # =========================================================
@@ -18,7 +18,7 @@ def pick_latest_source_file(base: Path) -> Path:
     for pat in FILE_PATTERNS:
         candidates.extend(base.glob(pat))
     if not candidates:
-        raise FileNotFoundError("找不到『累計核發-國別』來源檔")
+        raise FileNotFoundError("找不到符合命名規則的『累計核發-國別』來源檔")
 
     with_ym = []
     for p in candidates:
@@ -28,7 +28,7 @@ def pick_latest_source_file(base: Path) -> Path:
     if with_ym:
         with_ym.sort(key=lambda x: x[0], reverse=True)
         return with_ym[0][1]
-    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 # =========================================================
 # 2) 日期解析與快取讀取
@@ -37,7 +37,8 @@ YM_FULL_RE = re.compile(r"^\s*(\d{2,4})\s*[\/\-.年]\s*(\d{1,2})\s*(?:月)?\s*$"
 
 def parse_ym_strict(x):
     if pd.isna(x): return pd.NaT
-    if isinstance(x, (datetime, pd.Timestamp, date)): return pd.Timestamp(x.year, x.month, 1)
+    if isinstance(x, (datetime, pd.Timestamp, date)): 
+        return pd.Timestamp(x.year, x.month, 1)
     s = str(x).replace("\u00a0", "").replace("\u3000", "").strip()
     if any(tok in s for tok in ["～", "〜", "~", "至"]): return pd.NaT
     if re.fullmatch(r"\d{6}", s): return pd.to_datetime(s, format="%Y%m", errors="coerce")
@@ -51,7 +52,7 @@ def parse_ym_strict(x):
 def to_num(series):
     return pd.to_numeric(series.astype(str).str.replace(",", "").replace({"-": "0", "nan": "0"}), errors='coerce').fillna(0)
 
-@st.cache_data # ✨ 加上快取機制
+@st.cache_data
 def read_and_clean_excel(path_str: str) -> pd.DataFrame:
     path = Path(path_str)
     engine = "openpyxl" if path.suffix.lower() == ".xlsx" else "xlrd"
@@ -65,28 +66,30 @@ def read_and_clean_excel(path_str: str) -> pd.DataFrame:
             break
             
     df = raw_xls.iloc[header_row+1:].copy()
-    df.columns = raw_xls.iloc[header_row].astype(str).str.strip()
+    df.columns = [str(c).strip() for c in raw_xls.iloc[header_row]]
     return df
 
 # =========================================================
 # 3) 資料處理邏輯
 # =========================================================
-def build_table5_data(df: pd.DataFrame, requested_ym: str | None, top_n: int = 10):
+def build_table5_data(df: pd.DataFrame, requested_ym: str | None, top_n: int = 10) -> Tuple[pd.DataFrame, str]:
     df.columns = [str(c).strip() for c in df.columns]
-    country_col = next((c for c in df.columns if any(k in c for k in ["國別", "國籍"])), df.columns[1])
+    country_cols = [c for c in df.columns if any(k in c for k in ["國別", "國籍"])]
+    if not country_cols: raise ValueError("找不到國別分類欄位")
+    country_col = country_cols[0]
     
     df["統計年月"] = df["統計年月"].ffill()
     df["date"] = df["統計年月"].apply(parse_ym_strict)
     
     valid_dates = df["date"].dropna()
-    cutoff = valid_dates.max()
+    max_date = valid_dates.max()
+    cutoff = max_date
     if requested_ym:
         req = parse_ym_strict(requested_ym)
-        if not pd.isna(req): cutoff = min(req, cutoff)
+        if not pd.isna(req): cutoff = min(req, max_date)
 
     d = df[df["date"] <= cutoff].copy()
-    d[country_col] = d[country_col].astype(str).str.strip()
-    d = d[~d[country_col].isin(["", "總計", "合計"])].copy()
+    d = d[d[country_col].astype(str).str.strip() != "總計"]
     
     d["male_v"] = to_num(d["男"])
     d["female_v"] = to_num(d["女"])
@@ -105,13 +108,13 @@ def build_table5_data(df: pd.DataFrame, requested_ym: str | None, top_n: int = 1
         }], index=["其他"])
         main_top = pd.concat([main_top, others_row])
     
-    # 計算合計與占比
+    # 計算合計
     grand_total = main_top["total_v"].sum()
     grand_male = main_top["male_v"].sum()
     grand_female = main_top["female_v"].sum()
     
-    # 格式化輸出列
-    rows = [] # ✨ 修正：補回被遺漏的初始化
+    # 格式化輸出
+    rows = []
     for idx, r in main_top.iterrows():
         rows.append({
             "國別": idx,
@@ -139,29 +142,38 @@ def build_table5_data(df: pd.DataFrame, requested_ym: str | None, top_n: int = 1
         "國別占比": "-"
     })
     
-    return pd.DataFrame(rows), cutoff.strftime("%Y/%m")
+    used_ym_str = f"{cutoff.year}/{int(cutoff.month):02d}"
+    return pd.DataFrame(rows), used_ym_str
 
 # =========================================================
-# 4) ✨ Streamlit 專屬渲染函式 (給 app.py 呼叫的入口)
+# 4) ✨ Streamlit 渲染入口
 # =========================================================
 def render_streamlit(data_dir: Path):
     apply_streamlit_cjk_css()
     st.subheader("📊 表5：累計許可人次 (按國別及性別分)")
     
-    requested = st.text_input("您可以手動輸入統計截止月份 (例：2025/11)，若留白則自動抓取最新資料：", placeholder="例如：2025/11", key="table5_input")
+    requested = st.text_input("您可以手動輸入截止月份 (例：2025/11)，若留白則自動抓取最新資料：", 
+                              placeholder="例如：2025/11", key="table5_input")
     requested = requested.strip() or None
 
     try:
         source_file = pick_latest_source_file(data_dir)
         df_raw = read_and_clean_excel(str(source_file))
-        
         table5_df, used_ym_str = build_table5_data(df_raw, requested)
         
         y, m = used_ym_str.split("/")
-        st.markdown(f"**目前顯示資料時間：截至 {y}年{int(m)}月底**")
+        st.info(f"📅 目前顯示資料時間：截至 {y}年{int(m)}月底")
         
-        # ✨ 將表格渲染在網頁上
-        st.dataframe(table5_df, hide_index=True, width="stretch")
+        # ✨ CSV 下載功能 (UTF-8 with BOM 以利 Excel)
+        csv = table5_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 下載國別統計報表 (CSV)",
+            data=csv,
+            file_name=f"表5_累計許可人次_國別及性別_{y}{int(m):02d}.csv",
+            mime="text/csv",
+        )
+
+        st.dataframe(table5_df, hide_index=True, use_container_width=True)
         
     except Exception as e:
         st.error(f"讀取或處理資料時發生錯誤：{e}")
