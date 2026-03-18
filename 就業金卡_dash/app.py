@@ -5,7 +5,10 @@ from pathlib import Path
 
 from dash import Dash, Input, Output, dcc, html
 
-from dash_adapter import REPORT_LABEL_BY_MODULE, REPORT_MENU, render_report_to_dash
+try:
+    from .dash_adapter import REPORT_LABEL_BY_MODULE, REPORT_MENU, render_report_to_dash
+except ImportError:
+    from dash_adapter import REPORT_LABEL_BY_MODULE, REPORT_MENU, render_report_to_dash
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "就業金卡"
 LOGGER = logging.getLogger(__name__)

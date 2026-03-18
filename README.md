@@ -25,3 +25,9 @@ Plotly Dash:
 ```bash
 python 就業金卡_dash/app.py
 ```
+
+Render (Gunicorn):
+
+```bash
+gunicorn app:app
+```
