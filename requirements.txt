@@ -2,5 +2,7 @@ gunicorn
 dash>=2.16.0
 plotly>=5.20.0
 pandas>=2.1.0
+matplotlib
 openpyxl
 xlrd
+python-docx
