@@ -9,6 +9,9 @@ from dash_adapter import REPORT_LABEL_BY_MODULE, REPORT_MENU, render_report_to_d
 DATA_DIR = Path(__file__).resolve().parent.parent / "就業金卡"
 
 app = Dash(__name__)
+server = app.server  # ✨ 關鍵：補上這行，gunicorn 才能抓到它
+app.title = "就業金卡報表系統 (Plotly Dash)"
+
 app.title = "就業金卡報表系統 (Plotly Dash)"
 
 dropdown_options = [{"label": label, "value": module} for label, module in REPORT_MENU]
