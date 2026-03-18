@@ -40,7 +40,7 @@ def _setup_matplotlib_fonts():
 _setup_matplotlib_fonts()
 
 # =========================================================
-# 2) 報表選單 (Export for app.py)
+# 2) 報表選單
 # =========================================================
 REPORT_MENU = [
     ("圖1: 累計核發人次趨勢", "figure_01"), ("圖2: 累計持卡人次-按領域分", "figure_02"),
@@ -58,7 +58,7 @@ REPORT_MENU = [
 REPORT_LABEL_BY_MODULE = {module: label for label, module in REPORT_MENU}
 
 # =========================================================
-# 3) 強化版紀錄器 (帶 Debug Print)
+# 3) 萬能模擬紀錄器 (支援裝飾器與分欄)
 # =========================================================
 class StreamlitRecorder:
     def __init__(self, requested_ym: str | None = None):
@@ -67,24 +67,29 @@ class StreamlitRecorder:
         self.sidebar = self
 
     def _record(self, kind: str, payload: Any):
-        print(f"🎬 [Recorder] 捕捉到 {kind}: {str(payload)[:50]}...")
+        print(f"🎬 [Recorder] 捕捉到 {kind}")
         self.events.append((kind, payload))
 
+    # --- 裝飾器模擬 (關鍵修正) ---
+    def cache_data(self, *args, **kwargs):
+        def decorator(f): return f
+        return decorator
+
+    def cache_resource(self, *args, **kwargs):
+        def decorator(f): return f
+        return decorator
+
+    # --- 輸出指令 ---
     def title(self, text: Any, **_: Any): self._record("title", str(text))
     def subheader(self, text: Any, **_: Any): self._record("subheader", str(text))
     def markdown(self, text: Any, **_: Any): self._record("markdown", str(text))
     def info(self, text: Any, **_: Any): self._record("info", str(text))
-    def warning(self, text: Any, **_: Any): self._record("info", f"⚠️ {text}")
-    def success(self, text: Any, **_: Any): self._record("info", f"✅ {text}")
     
     def write(self, *args: Any, **_: Any):
         for arg in args:
             if isinstance(arg, pd.DataFrame): self.dataframe(arg)
             elif isinstance(arg, (Figure, plt.Figure)): self.pyplot(arg)
             else: self._record("markdown", str(arg))
-
-    def text_input(self, label: str, value: str = "", **_: Any) -> str:
-        return self.requested_ym if self.requested_ym else value
 
     def dataframe(self, data: Any, **_: Any):
         if hasattr(data, "data"): data = data.data
@@ -99,16 +104,24 @@ class StreamlitRecorder:
         self._record("pyplot", fig)
         plt.clf()
 
-    # 佈局模擬
-    def columns(self, spec, **_): return [self] * (spec if isinstance(spec, int) else len(spec))
+    # --- 佈局組件 (支援解構語法) ---
+    def columns(self, spec, **_):
+        count = spec if isinstance(spec, int) else len(spec)
+        return [self] * count
+
     def container(self, **_): return self
     def expander(self, *args, **kwargs): return self
     def __enter__(self): return self
     def __exit__(self, *args): pass
-    def __getattr__(self, name: str): return lambda *args, **kwargs: None
+    
+    def text_input(self, label: str, value: str = "", **_: Any) -> str:
+        return self.requested_ym if self.requested_ym else value
+
+    def __getattr__(self, name: str):
+        return lambda *args, **kwargs: None
 
 # =========================================================
-# 4) 組件轉換
+# 4) 組件轉換與主入口 (維持原本優異的邏輯)
 # =========================================================
 def _matplotlib_figure_to_data_uri(fig: Figure) -> str:
     if FONT_PATH.exists():
@@ -120,13 +133,12 @@ def _matplotlib_figure_to_data_uri(fig: Figure) -> str:
             for label in ax.get_xticklabels() + ax.get_yticklabels(): label.set_fontproperties(prop)
             if ax.get_legend():
                 for text in ax.get_legend().get_texts(): text.set_fontproperties(prop)
-
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=140, bbox_inches="tight", facecolor='white')
     buf.seek(0)
-    img_base64 = base64.b64encode(buf.read()).decode("ascii")
+    img_b64 = base64.b64encode(buf.read()).decode("ascii")
     plt.close(fig)
-    return f"data:image/png;base64,{img_base64}"
+    return f"data:image/png;base64,{img_b64}"
 
 def _event_to_component(kind: str, val: Any, idx: int):
     if kind == "title": return html.H2(val)
@@ -148,23 +160,18 @@ def _event_to_component(kind: str, val: Any, idx: int):
         return html.Img(src=src, style={"maxWidth": "100%", "marginTop": "10px", "border": "1px solid #eee"})
     return None
 
-# =========================================================
-# 5) 主入口
-# =========================================================
 def render_report_to_dash(module_name: str, data_dir: Path, requested_ym: str | None = None):
     if str(data_dir) not in sys.path: sys.path.insert(0, str(data_dir))
-    
     recorder = StreamlitRecorder(requested_ym=requested_ym)
     original_st = sys.modules.get('streamlit')
     sys.modules['streamlit'] = recorder 
-
     try:
         if module_name in sys.modules: del sys.modules[module_name]
         module = importlib.import_module(module_name)
         module.render_streamlit(data_dir)
-        print(f"✅ 報表 {module_name} 執行完畢，共抓取 {len(recorder.events)} 個事件")
+        print(f"✅ 報表 {module_name} 執行完畢，抓取到 {len(recorder.events)} 個事件")
     except Exception as e:
-        print(f"❌ 執行報表失敗: {e}")
+        print(f"❌ 執行失敗: {e}")
         return [html.Div(f"執行失敗: {e}", style={"color": "red"})]
     finally:
         if original_st: sys.modules['streamlit'] = original_st
@@ -174,5 +181,4 @@ def render_report_to_dash(module_name: str, data_dir: Path, requested_ym: str | 
     for i, (kind, val) in enumerate(recorder.events):
         comp = _event_to_component(kind, val, i)
         if comp: components.append(comp)
-    
-    return components if components else [html.Div("⚠️ 報表已執行但無內容產出。請檢查數據路徑。")]
+    return components if components else [html.Div("⚠️ 執行成功但無內容，請檢查資料夾路徑。")]
