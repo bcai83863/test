@@ -1,21 +1,21 @@
 import re
+import platform # ✨ 補上漏掉的套件
 from pathlib import Path
 from datetime import datetime, date
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import streamlit as st # ✨ 新增 Streamlit 套件
+import streamlit as st 
 
 # =========================================================
 # 0) 領域設定
 # =========================================================
-# 領域順序（依你表4）
 DOMAIN_ORDER = ["經濟","科技","教育","數位","金融","文化、藝術","專案會商","建築設計","國防","運動","法律","環境","生技"]
 OTHER_GROUP = ["建築設計", "法律", "國防", "運動","環境","生技"]  # 圖2合併為其他
 
 # =========================================================
-# 1) 來源檔自動帶入
+# 1) 來源檔自動搜尋
 # =========================================================
 FILE_PATTERNS = ["*累計核發-領域.xlsx", "*累計核發-領域.xls"]
 FILENAME_YM_RE = re.compile(r"(\d{6})-(\d{6})累計核發-領域\.(xlsx|xls)$", re.IGNORECASE)
@@ -26,7 +26,7 @@ def pick_latest_source_file(base: Path) -> Path:
         candidates.extend(base.glob(pat))
 
     if not candidates:
-        raise FileNotFoundError(f"在資料夾找不到來源檔：{FILE_PATTERNS}")
+        raise FileNotFoundError(f"在資料夾找不到來源檔 (累計核發-領域)")
 
     with_ym = []
     for p in candidates:
@@ -39,15 +39,28 @@ def pick_latest_source_file(base: Path) -> Path:
         with_ym.sort(key=lambda x: x[0], reverse=True)
         return with_ym[0][1]
 
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0]
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 # =========================================================
-# 2) Excel 讀取與日期解析
+# 2) matplotlib 字型設定 (解決 Linux/Windows 相容性)
 # =========================================================
-@st.cache_data # ✨ 加上快取機制，提升網頁載入速度
+def apply_font_settings():
+    """確保圓餅圖在雲端 Linux 環境下能正確顯示中文"""
+    if platform.system() == 'Linux':
+        # Streamlit Cloud 專用字型清單
+        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans CJK JP', 'DejaVu Sans']
+    else:
+        # 本地 Windows 專用
+        plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'DFKai-SB', 'sans-serif']
+    
+    plt.rcParams['axes.unicode_minus'] = False # 解決負號顯示問題
+
+# =========================================================
+# 3) 資料讀取與解析
+# =========================================================
+@st.cache_data
 def read_excel_with_header_detection(path_str: str) -> pd.DataFrame:
-    path = Path(path_str) # 為了讓快取順利運作，傳入字串再轉回 Path
+    path = Path(path_str)
     engine = "openpyxl" if path.suffix.lower() == ".xlsx" else "xlrd"
     raw = pd.read_excel(path, header=None, engine=engine)
     header_row = 0
@@ -67,7 +80,7 @@ def parse_ym_strict(x):
     if pd.isna(x): return pd.NaT
     if isinstance(x, (datetime, pd.Timestamp, date)):
         return pd.Timestamp(x.year, x.month, 1)
-    s = str(x).replace("\u00a0", "").replace("\u3000", "").strip()
+    s = str(x).strip()
     if any(tok in s for tok in ["～", "〜", "~", "至"]): return pd.NaT
     if re.fullmatch(r"\d{6}", s): return pd.to_datetime(s, format="%Y%m", errors="coerce")
     m = YM_FULL_RE.match(s)
@@ -81,21 +94,21 @@ def to_num(series):
     return pd.to_numeric(series.astype(str).str.replace(",", "").replace({"-": "0", "nan": "0"}), errors='coerce').fillna(0)
 
 # =========================================================
-# 3) 資料處理
+# 4) 資料運算邏輯
 # =========================================================
 def build_fig2_data(df: pd.DataFrame, requested_ym: str | None):
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
     
-    ignore = {"統計年月", "男", "女", "總計"}
-    domain_col = [c for c in df.columns if c not in ignore][0]
+    ignore = {"統計年月", "男", "女", "總計", "date"}
+    domain_cols = [c for c in df.columns if c not in ignore]
+    if not domain_cols: raise ValueError("找不到領域分類欄位")
+    domain_col = domain_cols[0]
     
     df["統計年月"] = df["統計年月"].ffill()
     df["date"] = df["統計年月"].apply(parse_ym_strict)
     
-    valid_dates = df["date"].dropna()
-    max_date = valid_dates.max()
-    
+    max_date = df["date"].dropna().max()
     cutoff = max_date
     if requested_ym:
         req = parse_ym_strict(requested_ym)
@@ -112,7 +125,7 @@ def build_fig2_data(df: pd.DataFrame, requested_ym: str | None):
     other_sum = base[base["領域"].isin(OTHER_GROUP)]["total"].sum()
     main = base[~base["領域"].isin(OTHER_GROUP)].copy()
     
-    other_label = "其他（建築設計、法律、國防、運動、環境、生技）"
+    other_label = "其他\n(建築、法律、國防、\n運動、環境、生技)" # ✨ 預先在標籤內加換行
     main = pd.concat([main, pd.DataFrame([{"領域": other_label, "total": other_sum}])], ignore_index=True)
     main = main.sort_values("total", ascending=False).reset_index(drop=True)
     
@@ -122,7 +135,7 @@ def build_fig2_data(df: pd.DataFrame, requested_ym: str | None):
     return main, cutoff.strftime("%Y/%m")
 
 # =========================================================
-# 4) 繪圖工具 (✨ 拔除存檔，直接回傳 fig，並修正字體)
+# 5) 繪圖邏輯 (✨ 加入標籤換行與字型修復)
 # =========================================================
 def _wrap_label(text_obj, fig, max_px):
     renderer = fig.canvas.get_renderer()
@@ -140,12 +153,10 @@ def _wrap_label(text_obj, fig, max_px):
         else:
             cur = test_text
     lines.append(cur)
-    text_obj.set_text("\n".join(lines[:3])) 
+    text_obj.set_text("\n".join(lines[:4])) 
 
 def plot_fig2(df_plot: pd.DataFrame):
-    # ✨ 修正為 Linux 專用的思源黑體，徹底消滅豆腐塊！
-    plt.rcParams["axes.unicode_minus"] = False
-    plt.rcParams["font.sans-serif"] = ["Noto Sans CJK JP", "sans-serif"]
+    apply_font_settings() # ✨ 確保字型套用
     
     fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
     
@@ -164,40 +175,36 @@ def plot_fig2(df_plot: pd.DataFrame):
         _wrap_label(t, fig, 350) 
 
     plt.tight_layout()
-    
-    return fig # ✨ 核心改變：我們把畫布交給 Streamlit，不存檔了
+    return fig
 
 # =========================================================
-# 5) ✨ Streamlit 專屬渲染函式 (給 app.py 呼叫的入口)
+# 6) ✨ Streamlit 專屬渲染函式
 # =========================================================
 def render_streamlit(data_dir: Path):
     st.subheader("📊 圖2：累計就業金卡持卡人次及比例 (按領域分)")
     
-    # 精緻的網頁輸入框，加入 key 避免跟其他頁面衝突
-    requested = st.text_input("您可以手動輸入截止月份 (例：2025/11)，若留白則自動抓取最新資料：", placeholder="例如：2025/11", key="fig2_input")
+    requested = st.text_input("您可以手動輸入截止月份 (例：2025/11)，若留白則自動抓取最新資料：", 
+                              placeholder="例如：2025/11", key="fig2_input")
     requested = requested.strip() or None
 
     try:
         source_file = pick_latest_source_file(data_dir)
-        df_raw = read_excel_with_header_detection(str(source_file)) # 轉字串給快取
+        df_raw = read_excel_with_header_detection(str(source_file))
         df_plot, used_ym = build_fig2_data(df_raw, requested)
         
         y, m = used_ym.split("/")
-        st.markdown(f"**目前顯示資料時間：截至 {y}年{int(m)}月**")
+        st.info(f"📅 目前顯示資料時間：截至 {y}年{int(m)}月")
 
         # 1. 顯示圓餅圖
         fig = plot_fig2(df_plot)
         st.pyplot(fig)
         
-        # 2. ✨ 加碼顯示原始數據表格 (取代原本的匯出 CSV)
+        # 2. 顯示原始數據表格
         st.markdown("##### 📄 領域數據明細")
-        
-        # 整理一下表格的顯示格式，讓它更美觀
         df_display = df_plot.copy()
-        df_display["total"] = df_display["total"].apply(lambda x: f"{int(x):,}") # 加上千分位撇號
-        df_display["pct"] = df_display["pct"].apply(lambda x: f"{x*100:.1f}%")    # 換成百分比格式
+        df_display["total"] = df_display["total"].apply(lambda x: f"{int(x):,}")
+        df_display["pct"] = df_display["pct"].apply(lambda x: f"{x*100:.1f}%")
         df_display.columns = ["申請領域", "累計人次", "佔比"]
-        
         st.dataframe(df_display, hide_index=True, width="stretch")
         
     except Exception as e:

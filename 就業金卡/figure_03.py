@@ -1,4 +1,5 @@
 import re
+import platform # ✨ 補上漏掉的套件
 from pathlib import Path
 from datetime import datetime, date
 
@@ -7,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib import font_manager as fm
-import streamlit as st # ✨ 新增 Streamlit 套件
+import streamlit as st 
 
 # =========================================================
 # 1) 來源檔自動帶入
@@ -21,7 +22,7 @@ def pick_latest_source_file(base: Path) -> Path:
         candidates.extend(base.glob(pat))
 
     if not candidates:
-        raise FileNotFoundError(f"在資料夾找不到來源檔：{FILE_PATTERNS}")
+        raise FileNotFoundError(f"在資料夾找不到來源檔 (累計核發-國別)")
 
     with_ym = []
     for p in candidates:
@@ -34,13 +35,26 @@ def pick_latest_source_file(base: Path) -> Path:
         with_ym.sort(key=lambda x: x[0], reverse=True)
         return with_ym[0][1]
 
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0]
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 # =========================================================
-# 2) Excel 與日期處理
+# 2) matplotlib 字型設定 (解決 Linux/Windows 相容性)
 # =========================================================
-@st.cache_data # ✨ 加上快取機制
+def apply_font_settings():
+    """確保圓餅圖在雲端 Linux 環境下能正確顯示中文"""
+    if platform.system() == 'Linux':
+        # Streamlit Cloud 專用字型清單
+        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans CJK JP', 'DejaVu Sans']
+    else:
+        # 本地 Windows 專用
+        plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'DFKai-SB', 'sans-serif']
+    
+    plt.rcParams['axes.unicode_minus'] = False # 解決負號顯示問題
+
+# =========================================================
+# 3) Excel 與日期處理
+# =========================================================
+@st.cache_data
 def read_excel_with_header_detection(path_str: str) -> pd.DataFrame:
     path = Path(path_str)
     engine = "openpyxl" if path.suffix.lower() == ".xlsx" else "xlrd"
@@ -75,21 +89,21 @@ def to_num(series):
     return pd.to_numeric(series.astype(str).str.replace(",", "").replace({"-": "0", "nan": "0"}), errors='coerce').fillna(0)
 
 # =========================================================
-# 3) 資料計算邏輯
+# 4) 資料計算邏輯
 # =========================================================
 def build_top10_data(df: pd.DataFrame, requested_ym: str | None):
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
     
-    ignore = {"統計年月", "男", "女", "總計"}
-    country_col = [c for c in df.columns if c not in ignore][0]
+    ignore = {"統計年月", "男", "女", "總計", "date"}
+    country_cols = [c for c in df.columns if c not in ignore]
+    if not country_cols: raise ValueError("找不到國別分類欄位")
+    country_col = country_cols[0]
     
     df["統計年月"] = df["統計年月"].ffill()
     df["date"] = df["統計年月"].apply(parse_ym_strict)
     
-    valid_dates = df["date"].dropna()
-    max_date = valid_dates.max()
-    
+    max_date = df["date"].dropna().max()
     cutoff = max_date
     if requested_ym:
         req = parse_ym_strict(requested_ym)
@@ -114,16 +128,8 @@ def build_top10_data(df: pd.DataFrame, requested_ym: str | None):
     return top10, cutoff.strftime("%Y/%m")
 
 # =========================================================
-# 4) 繪圖工具 (✨ 拔除存檔，直接回傳 fig，並修正字體)
+# 5) 繪圖工具
 # =========================================================
-def setup_matplotlib_chinese_font():
-    # ✨ 把 Linux 的 Noto Sans 放在第一順位
-    candidates = ["Noto Sans CJK JP", "Microsoft JhengHei", "DFKai-SB", "Arial Unicode MS", "SimHei", "sans-serif"]
-    available = {f.name for f in fm.fontManager.ttflist}
-    chosen = next((f for f in candidates if f in available), "sans-serif")
-    mpl.rcParams["font.sans-serif"] = [chosen]
-    mpl.rcParams["axes.unicode_minus"] = False
-
 def _wrap_label(text_obj, fig, max_px):
     renderer = fig.canvas.get_renderer()
     s = text_obj.get_text()
@@ -142,7 +148,7 @@ def _wrap_label(text_obj, fig, max_px):
     text_obj.set_text("\n".join(lines[:3]))
 
 def plot_fig3(df: pd.DataFrame):
-    setup_matplotlib_chinese_font()
+    apply_font_settings() # ✨ 套用字型
     fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
     
     values = df["total"]
@@ -153,6 +159,7 @@ def plot_fig3(df: pd.DataFrame):
                            colors=colors, labeldistance=1.1,
                            wedgeprops=dict(edgecolor="white", linewidth=1))
     
+    # 在較大的區塊內標註人次
     for i, p in enumerate(wedges):
         ang = (p.theta2 - p.theta1)/2. + p.theta1
         y = np.sin(np.deg2rad(ang))
@@ -166,15 +173,16 @@ def plot_fig3(df: pd.DataFrame):
         _wrap_label(t, fig, 150)
 
     plt.tight_layout()
-    return fig # ✨ 核心改變：我們把畫布交給 Streamlit，不存檔了
+    return fig
 
 # =========================================================
-# 5) ✨ Streamlit 專屬渲染函式 (給 app.py 呼叫的入口)
+# 6) ✨ Streamlit 專屬渲染函式
 # =========================================================
 def render_streamlit(data_dir: Path):
     st.subheader("📊 圖3：累計就業金卡前十大國別")
     
-    requested = st.text_input("您可以手動輸入截止月份 (例：2025/11)，若留白則自動抓取最新資料：", placeholder="例如：2025/11", key="fig3_input")
+    requested = st.text_input("您可以手動輸入截止月份 (例：2025/11)，若留白則自動抓取最新資料：", 
+                              placeholder="例如：2025/11", key="fig3_input")
     requested = requested.strip() or None
 
     try:
@@ -183,20 +191,18 @@ def render_streamlit(data_dir: Path):
         df_plot, used_ym = build_top10_data(df_raw, requested)
         
         y, m = used_ym.split("/")
-        st.markdown(f"**目前顯示資料時間：截至 {y}年{int(m)}月**")
+        st.info(f"📅 目前顯示資料時間：截至 {y}年{int(m)}月")
 
         # 1. 顯示圓餅圖
         fig = plot_fig3(df_plot)
         st.pyplot(fig)
         
-        # 2. ✨ 加碼顯示原始數據表格
+        # 2. 顯示原始數據表格
         st.markdown("##### 📄 前十大國別明細")
-        
         df_display = df_plot.copy()
         df_display["total"] = df_display["total"].apply(lambda x: f"{int(x):,}")
         df_display["share"] = df_display["share"].apply(lambda x: f"{x*100:.1f}%")
         df_display.columns = ["核發國別", "累計人次", "佔比"]
-        
         st.dataframe(df_display, hide_index=True, width="stretch")
         
     except Exception as e:

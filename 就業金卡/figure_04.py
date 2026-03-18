@@ -1,11 +1,12 @@
 import re
+import platform # ✨ 補上漏掉的套件
 from pathlib import Path
 from datetime import datetime, date
 
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
-import streamlit as st # ✨ 新增 Streamlit 套件
+import streamlit as st 
 
 # =========================================================
 # 0) 設定
@@ -21,7 +22,7 @@ AGE_LABELS_DISPLAY = [
 ]
 
 # =========================================================
-# 1) 來源檔自動帶入
+# 1) 來源檔自動搜尋
 # =========================================================
 FILE_PATTERNS = ["*累計核發-年齡.xlsx", "*累計核發-年齡.xls"]
 FILENAME_YM_RE = re.compile(r"(\d{6})-(\d{6})累計核發-年齡\.(xlsx|xls)$", re.IGNORECASE)
@@ -44,13 +45,23 @@ def pick_latest_source_file(base: Path) -> Path:
         with_ym.sort(key=lambda x: x[0], reverse=True)
         return with_ym[0][1]
 
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0]
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 # =========================================================
-# 2) Excel 讀取與資料解析
+# 2) matplotlib 字型設定 (解決 Linux/Windows 相容性)
 # =========================================================
-@st.cache_data # ✨ 加上快取機制
+def apply_font_settings():
+    """確保長條圖在雲端 Linux 環境下能正確顯示中文"""
+    if platform.system() == 'Linux':
+        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans CJK JP', 'DejaVu Sans']
+    else:
+        plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'DFKai-SB', 'sans-serif']
+    plt.rcParams['axes.unicode_minus'] = False 
+
+# =========================================================
+# 3) 資料讀取與解析
+# =========================================================
+@st.cache_data
 def read_and_clean_excel(path_str: str) -> pd.DataFrame:
     path = Path(path_str)
     engine = "openpyxl" if path.suffix.lower() == ".xlsx" else "xlrd"
@@ -64,15 +75,14 @@ def read_and_clean_excel(path_str: str) -> pd.DataFrame:
             break
             
     df_processed = df_raw.iloc[header_row + 1:].copy()
-    df_processed.columns = df_raw.iloc[header_row].astype(str).str.strip()
+    df_processed.columns = [str(c).strip() for c in df_raw.iloc[header_row]]
     return df_processed.dropna(axis=1, how="all").reset_index(drop=True)
 
 def parse_ym_strict(x):
     YM_FULL_RE = re.compile(r"^\s*(\d{2,4})\s*[\/\-.年]\s*(\d{1,2})\s*(?:月)?\s*$")
     if pd.isna(x): return pd.NaT
     if isinstance(x, (datetime, pd.Timestamp, date)): return pd.Timestamp(x.year, x.month, 1)
-    s = str(x).replace("\u00a0", "").replace("\u3000", "").strip()
-    if any(tok in s for tok in ["～", "〜", "~", "至"]): return pd.NaT
+    s = str(x).strip()
     if re.fullmatch(r"\d{6}", s): return pd.to_datetime(s, format="%Y%m", errors="coerce")
     m = YM_FULL_RE.match(s)
     if m:
@@ -85,29 +95,31 @@ def to_num(series):
     return pd.to_numeric(series.astype(str).str.replace(",", "").replace({"-": "0", "nan": "0"}), errors='coerce').fillna(0)
 
 # =========================================================
-# 3) 資料處理
+# 4) 資料計算邏輯
 # =========================================================
 def build_fig4_data(df: pd.DataFrame, requested_ym: str | None):
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
     
-    # 自動辨識年齡欄
-    ignore = {"統計年月", "男", "女", "總計"}
-    age_col = [c for c in df.columns if c not in ignore][0]
+    ignore = {"統計年月", "男", "女", "總計", "date"}
+    age_cols = [c for c in df.columns if c not in ignore]
+    if not age_cols: raise ValueError("找不到年齡分類欄位")
+    age_col = age_cols[0]
     
     df["統計年月"] = df["統計年月"].ffill()
     df["date"] = df["統計年月"].apply(parse_ym_strict)
     
-    # 移除統計資料累計塊
+    # 移除統計資料累計塊 (如果有)
     hit = df.astype(str).apply(lambda col: col.str.contains("統計資料累計", na=False)).any(axis=1)
     if hit.any():
         df = df.loc[: hit[hit].index[0] - 1].copy()
 
     valid_dates = df["date"].dropna()
-    cutoff = valid_dates.max()
+    max_date = valid_dates.max()
+    cutoff = max_date
     if requested_ym:
         req = parse_ym_strict(requested_ym)
-        if not pd.isna(req): cutoff = min(req, cutoff)
+        if not pd.isna(req): cutoff = min(req, max_date)
 
     df_filtered = df[(df["date"] <= cutoff) & (df[age_col].astype(str).str.strip() != "總計")].copy()
     df_filtered["male_v"] = to_num(df_filtered["男"])
@@ -120,12 +132,10 @@ def build_fig4_data(df: pd.DataFrame, requested_ym: str | None):
     return g, cutoff.strftime("%Y/%m")
 
 # =========================================================
-# 4) 繪圖工具 (✨ 拔除存檔，直接回傳 fig，並修正字體)
+# 5) 繪圖邏輯
 # =========================================================
 def plot_fig4(fig_data: pd.DataFrame):
-    # ✨ 修正為 Linux 專用的思源黑體，徹底消滅豆腐塊！
-    plt.rcParams["font.sans-serif"] = ["Noto Sans CJK JP", "sans-serif"]
-    plt.rcParams["axes.unicode_minus"] = False
+    apply_font_settings() # ✨ 套用字型
     
     # 邏輯：未滿20歲若為0則排除
     plot_df = fig_data.copy()
@@ -143,29 +153,31 @@ def plot_fig4(fig_data: pd.DataFrame):
 
     # 軸設定
     ax.set_xticks(x)
-    ax.set_xticklabels(display_labels, fontsize=12)
-    ax.set_xlabel("年齡(歲)", fontweight="bold", fontsize=14)
-    ax.set_ylabel("人次", fontweight="bold", fontsize=14, rotation=0, labelpad=20)
+    ax.set_xticklabels(display_labels, fontsize=11)
+    ax.set_xlabel("年齡(歲)", fontweight="bold", fontsize=12)
+    ax.set_ylabel("人次", fontweight="bold", fontsize=12, rotation=0, labelpad=20)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}"))
     
     # 標註總數
     for i, t in enumerate(plot_df["total"]):
-        ax.text(i, t + (plot_df["total"].max() * 0.02), f"{int(t):,}", ha='center', fontsize=10)
+        if t > 0:
+            ax.text(i, t + (plot_df["total"].max() * 0.01), f"{int(t):,}", ha='center', fontsize=10)
 
     ax.legend(loc="upper right", frameon=False)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     
     plt.tight_layout()
-    return fig # ✨ 回傳給 Streamlit 渲染
+    return fig
 
 # =========================================================
-# 5) ✨ Streamlit 專屬渲染函式 (給 app.py 呼叫的入口)
+# 6) ✨ Streamlit 專屬渲染函式
 # =========================================================
 def render_streamlit(data_dir: Path):
     st.subheader("📊 圖4：累計核發就業金卡年齡及性別")
     
-    requested = st.text_input("您可以手動輸入截止月份 (例：2025/11)，若留白則自動抓取最新資料：", placeholder="例如：2025/11", key="fig4_input")
+    requested = st.text_input("您可以手動輸入截止月份 (例：2025/11)，若留白則自動抓取最新資料：", 
+                              placeholder="例如：2025/11", key="fig4_input")
     requested = requested.strip() or None
 
     try:
@@ -174,15 +186,14 @@ def render_streamlit(data_dir: Path):
         fig_data, used_ym = build_fig4_data(df_raw, requested)
         
         y, m = used_ym.split("/")
-        st.markdown(f"**目前顯示資料時間：截至 {y}年{int(m)}月**")
+        st.info(f"📅 目前顯示資料時間：截至 {y}年{int(m)}月")
 
         # 1. 顯示堆疊長條圖
         fig = plot_fig4(fig_data)
         st.pyplot(fig)
         
-        # 2. ✨ 加碼顯示原始數據表格
+        # 2. 顯示原始數據表格
         st.markdown("##### 📄 年齡及性別人次明細")
-        
         df_display = fig_data.copy()
         df_display.columns = ["年齡級距", "男性 (人次)", "女性 (人次)", "總計 (人次)"]
         

@@ -1,11 +1,12 @@
 import re
+import platform # ✨ 補上漏掉的套件
 from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import streamlit as st # ✨ 新增 Streamlit 套件
+import streamlit as st 
 
 # =========================================================
 # 1) 自動尋找最新來源檔
@@ -37,17 +38,28 @@ def pick_latest_age_gender_file(base: Path) -> Tuple[Path, pd.Timestamp]:
 
     if not cands:
         raise FileNotFoundError(
-            "找不到檔名同時包含「有效」與「年齡」且含 YYYYMM(DD) 的 Excel。\n"
-            "請確認檔案放在 BASE 資料夾內，例如：20251130有效就業金卡年齡及性別統計報表.xlsx"
+            "找不到檔名同時包含「有效」與「年齡」的 Excel 檔案。\n"
+            "請確認檔案已上傳至資料夾。"
         )
 
     cands.sort(key=lambda x: x[1])
     return cands[-1][0], cands[-1][1]
 
 # =========================================================
-# 2) 讀取 Excel 與表頭自動偵測
+# 2) matplotlib 字型設定 (解決 Linux/Windows 相容性)
 # =========================================================
-@st.cache_data # ✨ 加上快取機制
+def apply_font_settings():
+    """確保長條圖在雲端 Linux 環境下能正確顯示中文"""
+    if platform.system() == 'Linux':
+        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans CJK JP', 'DejaVu Sans']
+    else:
+        plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'DFKai-SB', 'sans-serif']
+    plt.rcParams['axes.unicode_minus'] = False 
+
+# =========================================================
+# 3) 讀取 Excel 與表頭自動偵測
+# =========================================================
+@st.cache_data
 def load_best_sheet(path_str: str) -> pd.DataFrame:
     path = Path(path_str)
     engine = "openpyxl" if path.suffix.lower() == ".xlsx" else "xlrd"
@@ -60,7 +72,7 @@ def load_best_sheet(path_str: str) -> pd.DataFrame:
         try:
             raw = pd.read_excel(path, sheet_name=sh, engine=engine, header=None)
             
-            # 偵測表頭列
+            # 權重偵測表頭列
             hdr_i, score_max = 0, -1
             for i in range(min(150, len(raw))):
                 row = raw.iloc[i].astype(str).fillna("").tolist()
@@ -93,12 +105,12 @@ def load_best_sheet(path_str: str) -> pd.DataFrame:
             continue
 
     if best_df is None:
-        raise RuntimeError("Excel 讀取失敗：找不到可辨識的「年齡/男性/女性」工作表。")
+        raise RuntimeError("Excel 讀取失敗：找不到可辨識的數據工作表。")
 
     return best_df
 
 # =========================================================
-# 3) 資料整理與歸一化
+# 4) 資料整理與歸一化
 # =========================================================
 def _find_col(cols, keywords):
     for c in cols:
@@ -108,21 +120,17 @@ def _find_col(cols, keywords):
 
 def to_num(s: pd.Series) -> pd.Series:
     x = s.astype(str).str.replace(",", "", regex=False).str.replace("\u3000", "", regex=False).str.strip()
-    x = x.replace({"nan": "", "NaN": "", "-": "", "－": "", "—": ""})
+    x = x.replace({"nan": "0", "NaN": "0", "-": "0", "－": "0", "—": "0"})
     return pd.to_numeric(x, errors="coerce").fillna(0)
 
 def canon_age_bucket(x: str) -> Optional[str]:
     s = str(x or "").replace("\u3000", "").replace(" ", "").replace("\n", "")
     s = s.replace("～", "-").replace("〜", "-").replace("~", "-").replace("—", "-").replace("–", "-")
-    if "未滿" in s or "<20" in s or "小於20" in s: return None
-    if "70" in s and ("以上" in s or "↑" in s): return "70歲以上(含)"
+    if "未滿" in s or "<20" in s or "小於20" in s: return "20歲以下"
+    if "70" in s and ("以上" in s or "↑" in s): return "70歲以上"
     
     m = re.search(r"(20|30|40|50|60)\s*歲?\s*-\s*(29|39|49|59|69)\s*歲?", s)
-    if m: return f"{int(m.group(1))}-{int(m.group(2))}歲"
-    m2 = re.search(r"(20|30|40|50|60)\s*-\s*(29|39|49|59|69)\s*歲?", s)
-    if m2: return f"{int(m2.group(1))}-{int(m2.group(2))}歲"
-    m3 = re.search(r"(20|30|40|50|60)\s*歲\s*-\s*(29|39|49|59|69)\b", s)
-    if m3: return f"{int(m3.group(1))}-{int(m3.group(2))}歲"
+    if m: return f"{m.group(1)}-{m.group(2)}歲"
     return None
 
 def build_age_gender_series(df: pd.DataFrame) -> Tuple[list[str], np.ndarray, np.ndarray]:
@@ -135,10 +143,10 @@ def build_age_gender_series(df: pd.DataFrame) -> Tuple[list[str], np.ndarray, np
     col_female = _find_col(cols, ["女性", "女"])
 
     if not col_age or not col_male or not col_female:
-        raise RuntimeError(f"找不到必要欄位（年齡/男性/女性）。現有欄位：{cols}")
+        raise RuntimeError(f"找不到必要欄位。現有欄位：{cols}")
 
     d[col_age] = d[col_age].astype(str).str.replace("\u3000", "", regex=False).str.strip()
-    bad = {"總計", "性別占比", "年齡占比"}
+    bad = {"總計", "性別占比", "年齡占比", "nan"}
     d = d[~d[col_age].isin(bad)].copy()
 
     d["male"] = to_num(d[col_male])
@@ -146,57 +154,49 @@ def build_age_gender_series(df: pd.DataFrame) -> Tuple[list[str], np.ndarray, np
     d["bucket"] = d[col_age].map(canon_age_bucket)
     d = d.dropna(subset=["bucket"]).copy()
 
-    order = ["20-29歲", "30-39歲", "40-49歲", "50-59歲", "60-69歲", "70歲以上(含)"]
+    order = ["20歲以下", "20-29歲", "30-39歲", "40-49歲", "50-59歲", "60-69歲", "70歲以上"]
     g = d.groupby("bucket", as_index=False)[["male", "female"]].sum()
     g = g.set_index("bucket").reindex(order).fillna(0)
-
-    total_sum = float(g["male"].sum() + g["female"].sum())
-    if total_sum <= 0:
-        raise RuntimeError("年齡桶彙整後總和為 0，請檢查 Excel 資料格式。")
 
     return order, g["male"].to_numpy(), g["female"].to_numpy()
 
 # =========================================================
-# 4) 繪圖工具 (✨ 拔除存檔，修正字體並回傳 fig)
+# 5) 繪圖邏輯
 # =========================================================
 def plot_figure7(labels: list[str], male: np.ndarray, female: np.ndarray):
-    # ✨ 修正為 Linux 專用的思源黑體
-    plt.rcParams["font.sans-serif"] = ["Noto Sans CJK JP", "sans-serif"]
-    plt.rcParams["axes.unicode_minus"] = False
+    apply_font_settings() # ✨ 套用字型設定
 
-    labels_display = ["20-29", "30-39", "40-49", "50-59", "60-69", "70+"]
+    labels_display = [l.replace("歲", "") for l in labels]
     x = np.arange(len(labels_display))
     totals = male + female
 
-    fig, ax = plt.subplots(figsize=(11, 6.5))
+    fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
 
-    ax.bar(x, male, label="男", color="#095EDB")
-    ax.bar(x, female, bottom=male, label="女", color="#FF3300")
-    ax.grid(False)
+    ax.bar(x, male, width=0.6, label="男", color="#095EDB")
+    ax.bar(x, female, width=0.6, bottom=male, label="女", color="#FF3300")
 
-    ax.set_xlabel("年齡(歲)", fontweight="bold", fontsize=24)
-    ax.set_ylabel("人次", fontweight="bold", fontsize=24, rotation=0, labelpad=40)
-    ax.yaxis.label.set_horizontalalignment("right")
-    ax.yaxis.label.set_verticalalignment("center")
-    ax.yaxis.set_label_coords(-0.09, 0.5)
+    ax.set_xlabel("年齡(歲)", fontweight="bold", fontsize=12)
+    ax.set_ylabel("人次", fontweight="bold", fontsize=12, rotation=0, labelpad=20)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(labels_display, fontsize=20)
-    ax.tick_params(axis="y", labelsize=20)
+    ax.set_xticklabels(labels_display, fontsize=10)
+    ax.tick_params(axis="y", labelsize=10)
 
-    top_pad = float(np.max(totals) * 0.03) if len(totals) else 0.0
+    # 標註總數值
+    max_val = np.max(totals) if len(totals) > 0 else 1
     for xi, t in zip(x, totals):
-        ax.text(xi, t + top_pad, f"{int(round(t)):,}", ha="center", va="bottom", fontsize=20)
+        if t > 0:
+            ax.text(xi, t + (max_val * 0.01), f"{int(t):,}", ha="center", va="bottom", fontsize=10)
 
-    ax.legend(["男", "女"], loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False, fontsize=20)
+    ax.legend(loc="upper right", frameon=False)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
     plt.tight_layout()
-    return fig # ✨ 回傳給 Streamlit
+    return fig
 
 # =========================================================
-# 5) ✨ Streamlit 專屬渲染函式 (給 app.py 呼叫的入口)
+# 6) ✨ Streamlit 入口函式
 # =========================================================
 def render_streamlit(data_dir: Path):
     st.subheader("📊 圖7：有效就業金卡年齡及性別統計")
@@ -206,15 +206,15 @@ def render_streamlit(data_dir: Path):
         df = load_best_sheet(str(src))
         labels, male, female = build_age_gender_series(df)
         
-        st.markdown(f"**目前顯示資料時間：截至 {ym.year}年{ym.month}月**")
+        # 顯示日期資訊
+        st.info(f"📅 目前顯示資料時間：截至 {ym.year}年{int(ym.month)}月")
 
         # 1. 顯示堆疊長條圖
         fig = plot_figure7(labels, male, female)
         st.pyplot(fig)
         
-        # 2. ✨ 加碼顯示原始數據表格
-        st.markdown("##### 📄 有效持卡年齡及性別明細")
-        
+        # 2. 顯示原始數據表格
+        st.markdown("##### 📄 有效持卡年齡及性別人次明細")
         df_display = pd.DataFrame({
             "年齡級距": labels,
             "男性 (人次)": male,
@@ -222,6 +222,7 @@ def render_streamlit(data_dir: Path):
             "總計 (人次)": male + female
         })
         
+        # 格式化數字
         for col in ["男性 (人次)", "女性 (人次)", "總計 (人次)"]:
             df_display[col] = df_display[col].apply(lambda x: f"{int(x):,}")
             
