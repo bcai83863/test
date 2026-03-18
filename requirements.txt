@@ -7,3 +7,4 @@ openpyxl
 xlrd
 python-docx
 streamlit  # ✨ 關鍵：補回這行，讓舊程式碼不報錯
+fonttools  # ✨ 有助於字型解析

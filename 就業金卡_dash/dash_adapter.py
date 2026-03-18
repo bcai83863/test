@@ -6,13 +6,46 @@ import io
 import logging
 import sys
 import warnings
+import platform
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 from dash import dash_table, dcc, html
 from matplotlib.figure import Figure
 
+# =========================================================
+# 1) 字型修復邏輯 (防止 Linux 環境出現口口字)
+# =========================================================
+def _setup_matplotlib_fonts():
+    """在伺服器環境手動載入字型檔案"""
+    # 設定繪圖後台為 Agg (非交互式，適合伺服器)
+    plt.switch_backend('Agg')
+    
+    # 定義字型路徑
+    font_path = Path(__file__).parent / "assets" / "fonts" / "NotoSansTC-VariableFont_wght.ttf"
+    
+    if font_path.exists():
+        # 強制插入字型到 Matplotlib
+        fe = fm.FontEntry(fname=str(font_path), name='Noto Sans TC')
+        fm.fontManager.ttflist.insert(0, fe)
+        plt.rcParams['font.family'] = fe.name
+        plt.rcParams['axes.unicode_minus'] = False
+        print(f"✅ 已成功載入字型：{font_path}")
+    else:
+        # 備援方案
+        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'WenQuanYi Zen Hei', 'sans-serif']
+        plt.rcParams['axes.unicode_minus'] = False
+        print(f"⚠️ 找不到字型檔 {font_path}，使用系統備援字型。")
+
+# 執行字型初始化
+_setup_matplotlib_fonts()
+
+# =========================================================
+# 2) 報表清單設定
+# =========================================================
 REPORT_MENU: list[tuple[str, str]] = [
     ("圖1: 累計核發人次趨勢", "figure_01"),
     ("圖2: 累計持卡人次-按領域分", "figure_02"),
@@ -40,21 +73,11 @@ REPORT_MENU: list[tuple[str, str]] = [
 REPORT_LABEL_BY_MODULE = {module: label for label, module in REPORT_MENU}
 LOGGER = logging.getLogger(__name__)
 
-
-def _quiet_streamlit_logs() -> None:
-    for logger_name in (
-        "streamlit",
-        "streamlit.runtime",
-        "streamlit.runtime.caching",
-        "streamlit.runtime.caching.cache_data_api",
-        "streamlit.runtime.scriptrunner_utils.script_run_context",
-    ):
-        logging.getLogger(logger_name).setLevel(logging.ERROR)
-
-
+# =========================================================
+# 3) Streamlit 指令攔截器 (Recorder)
+# =========================================================
 class StreamlitRecorder:
-    """記錄 Streamlit 輸出，以便轉成 Dash 元件。"""
-
+    """模擬 st.xxx 指令，將輸出存入 events 串列"""
     def __init__(self, requested_ym: str | None = None):
         self.requested_ym = (requested_ym or "").strip()
         self.events: list[tuple[str, Any]] = []
@@ -62,166 +85,93 @@ class StreamlitRecorder:
     def _record(self, kind: str, payload: Any) -> None:
         self.events.append((kind, payload))
 
-    def subheader(self, text: Any, **_: Any) -> None:
-        self._record("subheader", str(text))
+    def subheader(self, text: Any, **_: Any) -> None: self._record("subheader", str(text))
+    def title(self, text: Any, **_: Any) -> None: self._record("title", str(text))
+    def markdown(self, text: Any, **_: Any) -> None: self._record("markdown", str(text))
+    def info(self, text: Any, **_: Any) -> None: self._record("info", str(text))
+    def error(self, text: Any, **_: Any) -> None: self._record("error", str(text))
 
-    def title(self, text: Any, **_: Any) -> None:
-        self._record("title", str(text))
-
-    def markdown(self, text: Any, **_: Any) -> None:
-        self._record("markdown", str(text))
-
-    def info(self, text: Any, **_: Any) -> None:
-        self._record("info", str(text))
-
-    def error(self, text: Any, **_: Any) -> None:
-        self._record("error", str(text))
-
-    def text_input(self, _label: str, value: str = "", **_: Any) -> str:
-        if self.requested_ym:
-            return self.requested_ym
-        return value or ""
+    def text_input(self, label: str, value: str = "", **_: Any) -> str:
+        # 攔截輸入框，優先回傳 Dash 介面傳進來的月份
+        return self.requested_ym if self.requested_ym else value
 
     def dataframe(self, data: Any, **_: Any) -> None:
-        if hasattr(data, "data") and isinstance(getattr(data, "data"), pd.DataFrame):
-            data = data.data
-        if isinstance(data, pd.DataFrame):
-            self._record("dataframe", data)
-        else:
-            self._record("markdown", f"⚠️ 非 DataFrame 輸出：{type(data).__name__}")
+        if hasattr(data, "data") and isinstance(data.data, pd.DataFrame): data = data.data
+        if isinstance(data, pd.DataFrame): self._record("dataframe", data)
 
     def pyplot(self, fig: Figure | None = None, **_: Any) -> None:
-        if fig is not None:
-            self._record("pyplot", fig)
+        if fig is not None: self._record("pyplot", fig)
 
-    def download_button(self, *_: Any, **__: Any) -> None:
-        return None
+    def __getattr__(self, name: str):
+        # 忽略所有其他不支援的 Streamlit 指令 (如 st.cache_data)
+        return lambda *args, **kwargs: None
 
-    def __getattr__(self, _name: str):  # pragma: no cover
-        def _noop(*_args: Any, **_kwargs: Any):
-            return None
-
-        return _noop
-
-
+# =========================================================
+# 4) 組件轉換工具
+# =========================================================
 def _dataframe_to_dash_table(df: pd.DataFrame, table_id: str):
     display_df = df.copy().fillna("")
     return dash_table.DataTable(
         id=table_id,
         data=display_df.to_dict("records"),
         columns=[{"name": str(c), "id": str(c)} for c in display_df.columns],
-        page_size=min(25, max(8, len(display_df))),
-        style_table={"overflowX": "auto", "marginBottom": "16px"},
+        page_size=20,
+        style_table={"overflowX": "auto"},
         style_cell={
-            "textAlign": "left",
-            "padding": "6px",
-            "fontSize": "14px",
-            "fontFamily": "Noto Sans CJK TC, WenQuanYi Zen Hei, sans-serif",
-            "whiteSpace": "normal",
-            "height": "auto",
-            "minWidth": "80px",
+            "textAlign": "left", "padding": "10px", "fontSize": "14px",
+            "fontFamily": "Noto Sans TC, sans-serif"
         },
-        style_header={
-            "backgroundColor": "#f5f5f5",
-            "fontWeight": "bold",
-        },
+        style_header={"backgroundColor": "#f8f9fa", "fontWeight": "bold"}
     )
 
-
 def _matplotlib_figure_to_data_uri(fig: Figure) -> str:
+    """將畫好的 Matplotlib 圖表轉成 Base64 圖片網址"""
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=170, bbox_inches="tight")
+    # 存檔時強制指定 dpi 與 背景色
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor='white')
     buf.seek(0)
     encoded = base64.b64encode(buf.read()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
 
-
 def _event_to_component(event_type: str, payload: Any, idx: int):
-    if event_type == "title":
-        return html.H2(payload, style={"marginTop": "8px"})
-    if event_type == "subheader":
-        return html.H3(payload, style={"marginTop": "8px"})
-    if event_type == "markdown":
-        return dcc.Markdown(payload)
-    if event_type == "info":
-        return html.Div(
-            payload,
-            style={
-                "backgroundColor": "#e8f4fd",
-                "borderLeft": "4px solid #1f77b4",
-                "padding": "8px 12px",
-                "margin": "8px 0",
-            },
-        )
-    if event_type == "error":
-        return html.Div(
-            payload,
-            style={
-                "backgroundColor": "#fdecec",
-                "borderLeft": "4px solid #d93025",
-                "padding": "8px 12px",
-                "margin": "8px 0",
-                "color": "#8a1f11",
-            },
-        )
-    if event_type == "dataframe":
-        return _dataframe_to_dash_table(payload, table_id=f"table-{idx}")
+    if event_type == "title": return html.H2(payload)
+    if event_type == "subheader": return html.H4(payload, style={"color": "#2c3e50"})
+    if event_type == "markdown": return dcc.Markdown(payload)
+    if event_type == "info": return html.Div(payload, className="alert alert-info", style={"padding": "10px", "backgroundColor": "#e7f3fe", "borderLeft": "5px solid #2196F3"})
+    if event_type == "dataframe": return _dataframe_to_dash_table(payload, f"table-{idx}")
     if event_type == "pyplot":
         src = _matplotlib_figure_to_data_uri(payload)
-        return html.Img(
-            src=src,
-            alt="report-figure",
-            style={
-                "maxWidth": "100%",
-                "height": "auto",
-                "display": "block",
-                "marginBottom": "16px",
-                "border": "1px solid #ddd",
-                "borderRadius": "6px",
-            },
-        )
+        return html.Img(src=src, style={"maxWidth": "100%", "marginTop": "20px", "border": "1px solid #eee"})
     return None
 
-
-def render_report_to_dash(
-    module_name: str,
-    data_dir: Path,
-    requested_ym: str | None = None,
-):
-    if str(data_dir) not in sys.path:
-        sys.path.insert(0, str(data_dir))
+# =========================================================
+# 5) 主入口：渲染報表至 Dash
+# =========================================================
+def render_report_to_dash(module_name: str, data_dir: Path, requested_ym: str | None = None):
+    # 確保模組搜尋路徑正確
+    if str(data_dir) not in sys.path: sys.path.insert(0, str(data_dir))
 
     recorder = StreamlitRecorder(requested_ym=requested_ym)
-    _quiet_streamlit_logs()
-
+    
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+        # 動態載入報表檔案 (例如 figure_01.py)
         module = importlib.import_module(module_name)
         module = importlib.reload(module)
-
+        
+        # 💉 關鍵注入：將報表內的 st 替換成我們的 recorder
         module.st = recorder
-        if hasattr(module, "apply_streamlit_cjk_css"):
-            module.apply_streamlit_cjk_css = lambda: None
-
-        module.render_streamlit(data_dir)
-
-    components: list[Any] = []
-    for idx, (event_type, payload) in enumerate(recorder.events):
+        
+        # 執行報表主程式
         try:
-            comp = _event_to_component(event_type, payload, idx)
-            if comp is not None:
-                components.append(comp)
-        except Exception as exc:  # 轉換錯誤需明確呈現
-            LOGGER.exception("轉換事件失敗: %s", event_type)
-            components.append(
-                html.Div(
-                    f"轉換事件 `{event_type}` 失敗：{exc}",
-                    style={"color": "#d93025"},
-                )
-            )
+            module.render_streamlit(data_dir)
+        except Exception as e:
+            return [html.Div(f"❌ 執行模組出錯：{e}", style={"color": "red"})]
 
-    if not components:
-        components.append(
-            html.Div("此報表沒有可顯示內容。", style={"color": "#666"})
-        )
-    return components
+    # 將紀錄的事件轉為 Dash 組件
+    components = []
+    for i, (kind, val) in enumerate(recorder.events):
+        comp = _event_to_component(kind, val, i)
+        if comp: components.append(comp)
+    
+    return components if components else [html.Div("⚠️ 此報表目前無可顯示內容")]
