@@ -145,13 +145,21 @@ class StreamlitRecorder:
 def _matplotlib_figure_to_data_uri(fig: Figure) -> str:
     if FONT_PATH.exists():
         prop = fm.FontProperties(fname=str(FONT_PATH))
+        for text in fig.texts:
+            text.set_fontproperties(prop)
         for ax in fig.get_axes():
             ax.title.set_fontproperties(prop)
             ax.xaxis.label.set_fontproperties(prop)
             ax.yaxis.label.set_fontproperties(prop)
-            for label in ax.get_xticklabels() + ax.get_yticklabels(): label.set_fontproperties(prop)
-            if ax.get_legend():
-                for t in ax.get_legend().get_texts(): t.set_fontproperties(prop)
+            for label in ax.get_xticklabels() + ax.get_yticklabels():
+                label.set_fontproperties(prop)
+            for text in ax.texts:
+                text.set_fontproperties(prop)
+            legend = ax.get_legend()
+            if legend:
+                legend.get_title().set_fontproperties(prop)
+                for t in legend.get_texts():
+                    t.set_fontproperties(prop)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=140, bbox_inches="tight", facecolor='white')
     buf.seek(0)
