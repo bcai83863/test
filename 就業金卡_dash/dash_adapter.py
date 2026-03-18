@@ -6,6 +6,7 @@ import io
 import logging
 import sys
 import warnings
+import traceback  # ✨ 新增：用於追蹤錯誤
 from pathlib import Path
 from typing import Any
 
@@ -15,12 +16,8 @@ import matplotlib.font_manager as fm
 from dash import dash_table, dcc, html
 from matplotlib.figure import Figure
 
-# 配置日誌
-logging.basicConfig(level=logging.INFO)
-LOGGER = logging.getLogger(__name__)
-
 # =========================================================
-# 1) 字型修復
+# 1) 字型與環境初始化
 # =========================================================
 FONT_FILENAME = "NotoSansTC-VariableFont_wght.ttf"
 FONT_PATH = Path(__file__).parent / "assets" / "fonts" / FONT_FILENAME
@@ -58,7 +55,7 @@ REPORT_MENU = [
 REPORT_LABEL_BY_MODULE = {module: label for label, module in REPORT_MENU}
 
 # =========================================================
-# 3) 萬能模擬紀錄器 (支援裝飾器與分欄)
+# 3) 萬能模擬紀錄器 (強化裝飾器支援)
 # =========================================================
 class StreamlitRecorder:
     def __init__(self, requested_ym: str | None = None):
@@ -70,21 +67,15 @@ class StreamlitRecorder:
         print(f"🎬 [Recorder] 捕捉到 {kind}")
         self.events.append((kind, payload))
 
-    # --- 裝飾器模擬 (關鍵修正) ---
-    def cache_data(self, *args, **kwargs):
-        def decorator(f): return f
-        return decorator
-
-    def cache_resource(self, *args, **kwargs):
-        def decorator(f): return f
-        return decorator
+    # --- ✨ 關鍵：確保裝飾器不會攔截掉函數執行 ---
+    def cache_data(self, *args, **kwargs): return lambda f: f
+    def cache_resource(self, *args, **kwargs): return lambda f: f
 
     # --- 輸出指令 ---
     def title(self, text: Any, **_: Any): self._record("title", str(text))
     def subheader(self, text: Any, **_: Any): self._record("subheader", str(text))
     def markdown(self, text: Any, **_: Any): self._record("markdown", str(text))
     def info(self, text: Any, **_: Any): self._record("info", str(text))
-    
     def write(self, *args: Any, **_: Any):
         for arg in args:
             if isinstance(arg, pd.DataFrame): self.dataframe(arg)
@@ -93,7 +84,7 @@ class StreamlitRecorder:
 
     def dataframe(self, data: Any, **_: Any):
         if hasattr(data, "data"): data = data.data
-        self._record("dataframe", data)
+        if isinstance(data, pd.DataFrame): self._record("dataframe", data)
 
     def table(self, data: Any, **_: Any): self.dataframe(data)
 
@@ -104,24 +95,20 @@ class StreamlitRecorder:
         self._record("pyplot", fig)
         plt.clf()
 
-    # --- 佈局組件 (支援解構語法) ---
+    # --- 佈局組件 ---
     def columns(self, spec, **_):
-        count = spec if isinstance(spec, int) else len(spec)
-        return [self] * count
-
+        n = spec if isinstance(spec, int) else len(spec)
+        return [self] * n
     def container(self, **_): return self
     def expander(self, *args, **kwargs): return self
     def __enter__(self): return self
     def __exit__(self, *args): pass
-    
     def text_input(self, label: str, value: str = "", **_: Any) -> str:
         return self.requested_ym if self.requested_ym else value
-
-    def __getattr__(self, name: str):
-        return lambda *args, **kwargs: None
+    def __getattr__(self, name: str): return lambda *args, **kwargs: None
 
 # =========================================================
-# 4) 組件轉換與主入口 (維持原本優異的邏輯)
+# 4) 組件轉換邏輯
 # =========================================================
 def _matplotlib_figure_to_data_uri(fig: Figure) -> str:
     if FONT_PATH.exists():
@@ -160,19 +147,33 @@ def _event_to_component(kind: str, val: Any, idx: int):
         return html.Img(src=src, style={"maxWidth": "100%", "marginTop": "10px", "border": "1px solid #eee"})
     return None
 
+# =========================================================
+# 5) 主渲染入口 (強化路徑檢查與錯誤日誌)
+# =========================================================
 def render_report_to_dash(module_name: str, data_dir: Path, requested_ym: str | None = None):
+    # 🕵️ 除錯：列出資料夾內容，確認 Excel 是否在那裡
+    if data_dir.exists():
+        files = [f.name for f in data_dir.glob("*")]
+        print(f"📁 [PathCheck] 資料夾存在，內含檔案: {files[:5]}...")
+    else:
+        print(f"❌ [PathCheck] 找不到資料夾: {data_dir}")
+
     if str(data_dir) not in sys.path: sys.path.insert(0, str(data_dir))
     recorder = StreamlitRecorder(requested_ym=requested_ym)
     original_st = sys.modules.get('streamlit')
     sys.modules['streamlit'] = recorder 
+
     try:
         if module_name in sys.modules: del sys.modules[module_name]
         module = importlib.import_module(module_name)
+        # 🚀 執行報表邏輯
         module.render_streamlit(data_dir)
         print(f"✅ 報表 {module_name} 執行完畢，抓取到 {len(recorder.events)} 個事件")
-    except Exception as e:
-        print(f"❌ 執行失敗: {e}")
-        return [html.Div(f"執行失敗: {e}", style={"color": "red"})]
+    except Exception:
+        # ✨ 關鍵：如果執行失敗，把完整錯誤堆疊印出來
+        print("❌ [ExecutionError] 報表執行發生錯誤:")
+        traceback.print_exc()
+        return [html.Div("報表執行中發生錯誤，請查看系統日誌 (Logs)。", style={"color": "red"})]
     finally:
         if original_st: sys.modules['streamlit'] = original_st
         else: del sys.modules['streamlit']
@@ -181,4 +182,4 @@ def render_report_to_dash(module_name: str, data_dir: Path, requested_ym: str | 
     for i, (kind, val) in enumerate(recorder.events):
         comp = _event_to_component(kind, val, i)
         if comp: components.append(comp)
-    return components if components else [html.Div("⚠️ 執行成功但無內容，請檢查資料夾路徑。")]
+    return components if components else [html.Div("⚠️ 報表載入成功但無內容。")]
