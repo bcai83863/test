@@ -85,13 +85,14 @@ class StreamlitRecorder:
     def info(self, t: Any, **_: Any): self._record("info", str(t))
     def success(self, t: Any, **_: Any): self._record("info", f"✅ {t}")
     def warning(self, t: Any, **_: Any): self._record("info", f"⚠️ {t}")
+    def error(self, t: Any, **_: Any): self._record("error", f"❌ {t}")
 
     # ✨ 核心輸出攔截
     def write(self, *args: Any, **_: Any):
         for arg in args:
-            if isinstance(arg, pd.DataFrame) or hasattr(arg, 'to_dict'): self.dataframe(arg)
+            if isinstance(arg, go.Figure): self.plotly_chart(arg)
             elif isinstance(arg, (Figure, plt.Figure)): self.pyplot(arg)
-            elif isinstance(arg, go.Figure): self.plotly_chart(arg)
+            elif isinstance(arg, pd.DataFrame) or hasattr(arg, 'to_dict'): self.dataframe(arg)
             else: self.markdown(str(arg))
 
     def dataframe(self, data: Any, **_: Any):
@@ -105,7 +106,6 @@ class StreamlitRecorder:
             fig = plt.gcf()
         if not isinstance(fig, Figure): fig = plt.gcf()
         self._record("pyplot", fig)
-        plt.clf()
 
     def plotly_chart(self, fig: Any, **_: Any):
         self._record("plotly", fig)
@@ -114,8 +114,20 @@ class StreamlitRecorder:
         self._record("markdown", "🖼️ (圖片顯示暫不支援，請改用 pyplot 或 plotly)")
 
     # ✨ 運算與佈局模擬
-    def cache_data(self, *args, **kwargs): return lambda f: f
-    def cache_resource(self, *args, **kwargs): return lambda f: f
+    @staticmethod
+    def _passthrough_cache_decorator(func: Any = None, **_: Any):
+        def decorator(f):
+            return f
+
+        if callable(func):
+            return func
+        return decorator
+
+    def cache_data(self, func: Any = None, **kwargs):
+        return self._passthrough_cache_decorator(func, **kwargs)
+
+    def cache_resource(self, func: Any = None, **kwargs):
+        return self._passthrough_cache_decorator(func, **kwargs)
     def columns(self, spec, **_):
         n = spec if isinstance(spec, int) else len(spec)
         return [self] * n
@@ -152,6 +164,7 @@ def _event_to_component(kind: str, val: Any, idx: int):
     if kind == "subheader": return html.H4(val, style={"color": "#2c3e50", "marginTop": "20px"})
     if kind == "markdown": return dcc.Markdown(val, dangerously_allow_html=True)
     if kind == "info": return html.Div(val, style={"padding": "12px", "backgroundColor": "#e7f3fe", "borderLeft": "5px solid #2196F3", "marginBottom": "10px"})
+    if kind == "error": return html.Div(val, style={"padding": "12px", "backgroundColor": "#fdecea", "borderLeft": "5px solid #d93025", "marginBottom": "10px", "color": "#5f2120"})
     if kind == "dataframe":
         df = val.copy().fillna("") if isinstance(val, pd.DataFrame) else pd.DataFrame(val).fillna("")
         return dash_table.DataTable(
@@ -187,11 +200,13 @@ def render_report_to_dash(module_name: str, data_dir: Path, requested_ym: str | 
         traceback.print_exc()
         return [html.Div("報表執行中發生錯誤，請檢查系統日誌。", style={"color": "red"})]
     finally:
-        if original_st: sys.modules['streamlit'] = original_st
-        else: del sys.modules['streamlit']
+        if original_st is not None:
+            sys.modules['streamlit'] = original_st
+        else:
+            sys.modules.pop('streamlit', None)
 
     components = []
     for i, (kind, val) in enumerate(recorder.events):
         comp = _event_to_component(kind, val, i)
-        if comp: components.append(comp)
+        if comp is not None: components.append(comp)
     return components if components else [html.Div("⚠️ 執行成功但無內容。")]

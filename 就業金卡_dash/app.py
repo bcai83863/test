@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from dash import Dash, Input, Output, dcc, html
@@ -7,6 +8,7 @@ from dash import Dash, Input, Output, dcc, html
 from dash_adapter import REPORT_LABEL_BY_MODULE, REPORT_MENU, render_report_to_dash
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "就業金卡"
+LOGGER = logging.getLogger(__name__)
 
 app = Dash(__name__)
 server = app.server  # ✨ 關鍵：補上這行，gunicorn 才能抓到它
@@ -65,24 +67,38 @@ app.layout = html.Div(
     Input("report-select", "value"),
     Input("cutoff-input", "value"),
 )
-def update_report(module_name: str, requested_ym: str | None):
-    label = REPORT_LABEL_BY_MODULE.get(module_name, module_name)
-    requested_ym = (requested_ym or "").strip()
+def update_report(module_name: str | None, requested_ym: str | None):
+    safe_module = (
+        module_name
+        if isinstance(module_name, str) and module_name in REPORT_LABEL_BY_MODULE
+        else default_module
+    )
+    label = REPORT_LABEL_BY_MODULE.get(safe_module, safe_module)
 
     try:
-        components = render_report_to_dash(
-            module_name=module_name,
-            data_dir=DATA_DIR,
-            requested_ym=requested_ym,
+        requested_ym_text = (
+            requested_ym.strip()
+            if isinstance(requested_ym, str)
+            else (str(requested_ym).strip() if requested_ym is not None else "")
         )
-        if requested_ym:
-            meta = f"目前報表：{label}｜截止月份輸入：{requested_ym}"
+        components = render_report_to_dash(
+            module_name=safe_module,
+            data_dir=DATA_DIR,
+            requested_ym=requested_ym_text,
+        )
+        if requested_ym_text:
+            meta = f"目前報表：{label}｜截止月份輸入：{requested_ym_text}"
         else:
             meta = f"目前報表：{label}｜截止月份：自動使用最新資料"
         return components, meta
     except Exception as exc:
+        LOGGER.exception(
+            "update_report callback failed (module=%r, cutoff=%r)",
+            module_name,
+            requested_ym,
+        )
         return (
-            [html.Div(f"載入報表失敗：{exc}", style={"color": "#d93025"})],
+            [html.Div(f"載入報表失敗：{type(exc).__name__}: {exc}", style={"color": "#d93025"})],
             f"目前報表：{label}",
         )
 
