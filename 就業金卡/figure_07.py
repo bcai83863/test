@@ -1,5 +1,4 @@
 import re
-import platform # ✨ 補上漏掉的套件
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -7,6 +6,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st 
+
+from font_utils import apply_cjk_font_settings, apply_streamlit_cjk_css
 
 # =========================================================
 # 1) 自動尋找最新來源檔
@@ -49,12 +50,8 @@ def pick_latest_age_gender_file(base: Path) -> Tuple[Path, pd.Timestamp]:
 # 2) matplotlib 字型設定 (解決 Linux/Windows 相容性)
 # =========================================================
 def apply_font_settings():
-    """確保長條圖在雲端 Linux 環境下能正確顯示中文"""
-    if platform.system() == 'Linux':
-        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans CJK JP', 'DejaVu Sans']
-    else:
-        plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'DFKai-SB', 'sans-serif']
-    plt.rcParams['axes.unicode_minus'] = False 
+    """套用跨平台 CJK 字型設定，確保 Streamlit Linux 可正確顯示中文。"""
+    apply_cjk_font_settings()
 
 # =========================================================
 # 3) 讀取 Excel 與表頭自動偵測
@@ -199,6 +196,7 @@ def plot_figure7(labels: list[str], male: np.ndarray, female: np.ndarray):
 # 6) ✨ Streamlit 入口函式
 # =========================================================
 def render_streamlit(data_dir: Path):
+    apply_streamlit_cjk_css()
     st.subheader("📊 圖7：有效就業金卡年齡及性別統計")
     
     try:

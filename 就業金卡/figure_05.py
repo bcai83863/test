@@ -7,6 +7,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st # ✨ 新增 Streamlit 套件
 
+from font_utils import apply_cjk_font_settings, apply_streamlit_cjk_css
+
 # =========================================================
 # 0) 設定
 # =========================================================
@@ -105,6 +107,11 @@ def build_fig5_data(df: pd.DataFrame) -> pd.DataFrame:
 # =========================================================
 # 3) 繪圖與自動換行工具 (✨ 修正字體並回傳 fig)
 # =========================================================
+def apply_font_settings():
+    """套用跨平台 CJK 字型設定，確保 Streamlit Linux 可正確顯示中文。"""
+    apply_cjk_font_settings()
+
+
 def _wrap_label(text_obj, fig, max_px):
     renderer = fig.canvas.get_renderer()
     s = text_obj.get_text()
@@ -122,9 +129,7 @@ def _wrap_label(text_obj, fig, max_px):
     text_obj.set_text("\n".join(lines[:3]))
 
 def plot_fig5(df_plot: pd.DataFrame):
-    # ✨ 修正為 Linux 專用的思源黑體
-    plt.rcParams["font.sans-serif"] = ["Noto Sans CJK JP", "sans-serif"]
-    plt.rcParams["axes.unicode_minus"] = False
+    apply_font_settings()
     
     fig, ax = plt.subplots(figsize=(10.5, 7.2), dpi=150)
     fig.subplots_adjust(right=0.75)
@@ -153,6 +158,7 @@ def plot_fig5(df_plot: pd.DataFrame):
 # 4) ✨ Streamlit 專屬渲染函式 (給 app.py 呼叫的入口)
 # =========================================================
 def render_streamlit(data_dir: Path):
+    apply_streamlit_cjk_css()
     st.subheader("📊 圖5：有效就業金卡 (按領域分)")
     
     try:

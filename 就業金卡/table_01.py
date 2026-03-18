@@ -5,6 +5,7 @@ from typing import Tuple
 
 import pandas as pd
 import streamlit as st  # ✨ 新增 Streamlit 套件
+from font_utils import apply_streamlit_cjk_css
 
 # =========================================================
 # 1) Excel 讀取與快取
@@ -135,6 +136,7 @@ def build_table1_data(df: pd.DataFrame, requested: str | None) -> Tuple[pd.DataF
 
 
 def render_streamlit(data_dir: Path):
+    apply_streamlit_cjk_css()
     st.subheader("📊 表1：歷年累計許可人次")
 
     requested = st.text_input("您可以手動輸入統計截止月份 (例：2025/11)，若留白則自動抓取最新資料：",

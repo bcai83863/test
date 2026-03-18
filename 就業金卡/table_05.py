@@ -5,6 +5,7 @@ from typing import Tuple
 
 import pandas as pd
 import streamlit as st # ✨ 新增 Streamlit 套件
+from font_utils import apply_streamlit_cjk_css
 
 # =========================================================
 # 1) 來源檔自動搜尋
@@ -144,6 +145,7 @@ def build_table5_data(df: pd.DataFrame, requested_ym: str | None, top_n: int = 1
 # 4) ✨ Streamlit 專屬渲染函式 (給 app.py 呼叫的入口)
 # =========================================================
 def render_streamlit(data_dir: Path):
+    apply_streamlit_cjk_css()
     st.subheader("📊 表5：累計許可人次 (按國別及性別分)")
     
     requested = st.text_input("您可以手動輸入統計截止月份 (例：2025/11)，若留白則自動抓取最新資料：", placeholder="例如：2025/11", key="table5_input")

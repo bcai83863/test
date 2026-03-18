@@ -4,6 +4,7 @@ from typing import Optional, Tuple, List
 
 import pandas as pd
 import streamlit as st # ✨ 新增 Streamlit 套件
+from font_utils import apply_streamlit_cjk_css
 
 # =========================================================
 # 0) 參數與順序設定
@@ -158,6 +159,7 @@ def build_table6_data(df: pd.DataFrame) -> pd.DataFrame:
 # 4) ✨ Streamlit 專屬渲染函式 (給 app.py 呼叫的入口)
 # =========================================================
 def render_streamlit(data_dir: Path):
+    apply_streamlit_cjk_css()
     st.subheader("📊 表6：有效就業金卡十大國別 (按領域分)")
     
     try:

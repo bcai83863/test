@@ -1,5 +1,4 @@
 import re
-import platform  # ✨ 補上漏掉的套件
 from pathlib import Path
 from datetime import datetime, date
 
@@ -8,6 +7,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import ticker
 import streamlit as st 
+
+from font_utils import apply_cjk_font_settings, apply_streamlit_cjk_css
 
 # =========================================================
 # 1) 自動尋找最新來源檔案
@@ -32,16 +33,8 @@ def find_latest_source_file(base_dir: Path) -> Path:
 # 2) matplotlib 字型設定函式
 # =========================================================
 def apply_font_settings():
-    """根據作業系統設定中文字型，解決雲端環境中文亂碼問題"""
-    if platform.system() == 'Linux':
-        # Streamlit Cloud (Linux) 專用設定
-        # 這裡會優先尋找在 packages.txt 中安裝的 Noto Sans CJK
-        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans CJK JP', 'DejaVu Sans']
-    else:
-        # 本地 Windows 專用設定
-        plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'DFKai-SB', 'sans-serif']
-    
-    plt.rcParams['axes.unicode_minus'] = False # 解決負號顯示問題
+    """套用跨平台 CJK 字型設定，確保 Streamlit Linux 可正確顯示中文。"""
+    apply_cjk_font_settings()
 
 # =========================================================
 # 3) 讀 Excel（自動找表頭）
@@ -168,6 +161,7 @@ def plot_fig1(m: pd.DataFrame, cutoff_date: pd.Timestamp):
 # 7) ✨ Streamlit 入口函式
 # =========================================================
 def render_streamlit(data_dir: Path):
+    apply_streamlit_cjk_css()
     apply_font_settings() # 套用字型設定
     
     st.subheader("📊 圖1：就業金卡累計核發人次")

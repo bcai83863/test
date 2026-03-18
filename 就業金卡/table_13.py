@@ -4,6 +4,7 @@ from typing import Optional, Tuple, List
 
 import pandas as pd
 import streamlit as st # ✨ 新增 Streamlit 套件
+from font_utils import apply_streamlit_cjk_css
 
 # =========================================================
 # 0) 參數設定
@@ -151,6 +152,7 @@ def build_table13(df: pd.DataFrame, top_n: int = TOP_N) -> pd.DataFrame:
 # 3) ✨ Streamlit 專屬渲染函式 (入口)
 # =========================================================
 def render_streamlit(data_dir: Path):
+    apply_streamlit_cjk_css()
     st.subheader("📊 表13：有效許可人次 (按國別及性別分)")
 
     try:

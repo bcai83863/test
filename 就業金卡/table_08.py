@@ -4,6 +4,7 @@ from typing import List
 
 import pandas as pd
 import streamlit as st # ✨ 新增 Streamlit 套件
+from font_utils import apply_streamlit_cjk_css
 
 # =========================================================
 # 1) 來源檔自動帶入 (挑選：*有效港澳)
@@ -100,6 +101,7 @@ def load_and_build_table8(path_str: str) -> pd.DataFrame:
 # 3) ✨ Streamlit 專屬渲染函式 (入口)
 # =========================================================
 def render_streamlit(data_dir: Path):
+    apply_streamlit_cjk_css()
     st.subheader("📊 表8：歷年有效許可人次 (外籍、港澳)")
 
     try:

@@ -5,6 +5,7 @@ from typing import Tuple
 
 import pandas as pd
 import streamlit as st # ✨ 新增 Streamlit 套件
+from font_utils import apply_streamlit_cjk_css
 
 # =========================================================
 # 0) 參數設定
@@ -145,6 +146,7 @@ def build_table3_data(df: pd.DataFrame, requested_ym: str | None):
 # 4) ✨ Streamlit 專屬渲染函式 (給 app.py 呼叫的入口)
 # =========================================================
 def render_streamlit(data_dir: Path):
+    apply_streamlit_cjk_css()
     st.subheader("📊 表3：歷年累計許可人次 (核發領域別分)")
     
     requested = st.text_input("您可以手動輸入統計截止月份 (例：2025/11)，若留白則自動抓取最新資料：", placeholder="例如：2025/11", key="table3_input")

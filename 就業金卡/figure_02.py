@@ -1,5 +1,4 @@
 import re
-import platform # ✨ 補上漏掉的套件
 from pathlib import Path
 from datetime import datetime, date
 
@@ -7,6 +6,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st 
+
+from font_utils import apply_cjk_font_settings, apply_streamlit_cjk_css
 
 # =========================================================
 # 0) 領域設定
@@ -45,15 +46,8 @@ def pick_latest_source_file(base: Path) -> Path:
 # 2) matplotlib 字型設定 (解決 Linux/Windows 相容性)
 # =========================================================
 def apply_font_settings():
-    """確保圓餅圖在雲端 Linux 環境下能正確顯示中文"""
-    if platform.system() == 'Linux':
-        # Streamlit Cloud 專用字型清單
-        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK TC', 'Noto Sans CJK JP', 'DejaVu Sans']
-    else:
-        # 本地 Windows 專用
-        plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'DFKai-SB', 'sans-serif']
-    
-    plt.rcParams['axes.unicode_minus'] = False # 解決負號顯示問題
+    """套用跨平台 CJK 字型設定，確保 Streamlit Linux 可正確顯示中文。"""
+    apply_cjk_font_settings()
 
 # =========================================================
 # 3) 資料讀取與解析
@@ -181,6 +175,7 @@ def plot_fig2(df_plot: pd.DataFrame):
 # 6) ✨ Streamlit 專屬渲染函式
 # =========================================================
 def render_streamlit(data_dir: Path):
+    apply_streamlit_cjk_css()
     st.subheader("📊 圖2：累計就業金卡持卡人次及比例 (按領域分)")
     
     requested = st.text_input("您可以手動輸入截止月份 (例：2025/11)，若留白則自動抓取最新資料：", 
