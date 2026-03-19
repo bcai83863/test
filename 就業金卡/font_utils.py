@@ -22,6 +22,14 @@ _CJK_FONT_FAMILY_CANDIDATES = [
 
 _FONT_FILE_KEYWORDS = ("noto", "cjk", "sourcehan", "wqy", "wenquanyi")
 _FONT_FILE_PATTERNS = ("*.ttf", "*.ttc", "*.otf")
+# 打包在 assets 裡的 NotoSansTC（Render 部署環境首選）
+_BUNDLED_FONT = (
+    Path(__file__).parent.parent
+    / "就業金卡_dash"
+    / "assets"
+    / "fonts"
+    / "NotoSansTC-VariableFont_wght.ttf"
+)
 _FONT_DIRS = (
     Path("/usr/share/fonts"),
     Path("/usr/local/share/fonts"),
@@ -42,6 +50,17 @@ def _iter_cjk_font_files() -> Iterator[Path]:
 
 @lru_cache(maxsize=1)
 def _register_extra_cjk_fonts() -> None:
+    # 優先嘗試打包字型（不依賴系統安裝）
+    if _BUNDLED_FONT.exists():
+        try:
+            fe = fm.FontEntry(fname=str(_BUNDLED_FONT), name="Noto Sans TC")
+            fm.fontManager.ttflist.insert(0, fe)
+        except (OSError, RuntimeError, ValueError, AttributeError):
+            try:
+                fm.fontManager.addfont(str(_BUNDLED_FONT))
+            except (OSError, RuntimeError, ValueError):
+                pass
+    # 再搜尋系統字型目錄
     for font_path in _iter_cjk_font_files():
         try:
             fm.fontManager.addfont(str(font_path))
@@ -53,6 +72,9 @@ def _register_extra_cjk_fonts() -> None:
 def pick_available_cjk_font() -> str:
     _register_extra_cjk_fonts()
     available = {font.name for font in fm.fontManager.ttflist}
+    # 優先使用打包字型名稱
+    if "Noto Sans TC" in available:
+        return "Noto Sans TC"
     for family in _CJK_FONT_FAMILY_CANDIDATES:
         if family in available:
             return family
