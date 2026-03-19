@@ -137,7 +137,10 @@ class StreamlitRecorder:
     def __exit__(self, *args): pass
     def text_input(self, label: str, value: str = "", **_: Any) -> str:
         return self.requested_ym if self.requested_ym else value
-    def __getattr__(self, name: str): return lambda *args, **kwargs: None
+    def __getattr__(self, name: str):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return lambda *args, **kwargs: None
 
 # =========================================================
 # 4) 組件轉換邏輯

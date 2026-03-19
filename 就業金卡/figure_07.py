@@ -172,12 +172,12 @@ def plot_figure7(labels: list[str], male: np.ndarray, female: np.ndarray):
     ax.bar(x, male, width=0.6, label="男", color="#095EDB")
     ax.bar(x, female, width=0.6, bottom=male, label="女", color="#FF3300")
 
-    ax.set_xlabel("年齡(歲)", fontweight="bold", fontsize=12)
-    ax.set_ylabel("人次", fontweight="bold", fontsize=12, rotation=0, labelpad=20)
+    ax.set_xlabel("年齡(歲)", fontweight="bold", fontsize=12, color="black")
+    ax.set_ylabel("人次", fontweight="bold", fontsize=12, color="black", rotation=0, labelpad=20)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(labels_display, fontsize=10)
-    ax.tick_params(axis="y", labelsize=10)
+    ax.set_xticklabels(labels_display, fontsize=10, color="black")
+    ax.tick_params(axis="y", labelsize=10, labelcolor="black")
 
     # 標註總數值
     max_val = np.max(totals) if len(totals) > 0 else 1

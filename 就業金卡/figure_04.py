@@ -150,10 +150,11 @@ def plot_fig4(fig_data: pd.DataFrame):
 
     # 軸設定
     ax.set_xticks(x)
-    ax.set_xticklabels(display_labels, fontsize=11)
-    ax.set_xlabel("年齡(歲)", fontweight="bold", fontsize=12)
-    ax.set_ylabel("人次", fontweight="bold", fontsize=12, rotation=0, labelpad=20)
+    ax.set_xticklabels(display_labels, fontsize=11, color="black")
+    ax.set_xlabel("年齡(歲)", fontweight="bold", fontsize=12, color="black")
+    ax.set_ylabel("人次", fontweight="bold", fontsize=12, color="black", rotation=0, labelpad=20)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}"))
+    ax.tick_params(axis="y", labelcolor="black")
     
     # 標註總數
     for i, t in enumerate(plot_df["total"]):

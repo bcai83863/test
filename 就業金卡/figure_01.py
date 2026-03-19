@@ -117,42 +117,118 @@ def plot_fig1(m: pd.DataFrame, cutoff_date: pd.Timestamp):
     tmp = m.copy()
     tmp["year"] = tmp["date"].dt.year
     tmp["month"] = tmp["date"].dt.month
-    cutoff_year, cutoff_month = int(cutoff_date.year), int(cutoff_date.month)
+    cutoff_year = int(cutoff_date.year)
+    cutoff_month = int(cutoff_date.month)
 
-    # 挑選每年 12 月以及最後一個月作為標籤點
-    selected_frames = []
+    def pick_year_dec_or_last(df_year: pd.DataFrame) -> pd.DataFrame:
+        dec = df_year[df_year["month"] == 12]
+        if not dec.empty:
+            return dec.tail(1)
+        return df_year.tail(1)
+
+    selected_frames: list[pd.DataFrame] = []
     years_all = sorted([int(y) for y in tmp["year"].unique()])
 
-    for y in years_all:
-        df_y = tmp[tmp["year"] == y]
-        if y < cutoff_year:
-            dec = df_y[df_y["month"] == 12]
-            selected_frames.append(dec.tail(1) if not dec.empty else df_y.tail(1))
-        elif y == cutoff_year:
-            target = df_y[df_y["month"] == cutoff_month]
-            selected_frames.append(target.tail(1) if not target.empty else df_y.tail(1))
+    if cutoff_month == 12:
+        years_upto = [y for y in years_all if y <= cutoff_year]
+        for y in years_upto:
+            df_y = tmp[tmp["year"] == y]
+            if not df_y.empty:
+                selected_frames.append(pick_year_dec_or_last(df_y))
+    else:
+        years_before = [y for y in years_all if y < cutoff_year]
+        for y in years_before:
+            df_y = tmp[tmp["year"] == y]
+            if not df_y.empty:
+                selected_frames.append(pick_year_dec_or_last(df_y))
 
-    points = pd.concat(selected_frames, ignore_index=True).drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
+        cutoff_row = tmp[(tmp["year"] == cutoff_year) & (tmp["month"] == cutoff_month)]
+        cutoff_row = cutoff_row.tail(1) if not cutoff_row.empty else tmp.tail(1)
+        selected_frames.append(cutoff_row)
 
-    # 座標軸與標籤設定
-    ax.tick_params(axis="both", labelsize=12)
+    points = (
+        pd.concat(selected_frames, ignore_index=True)
+        .drop_duplicates(subset=["date"])
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    major_ticks = [points["date"].iloc[0] - pd.DateOffset(years=1)] + points["date"].tolist()
+    major_labels = []
+    for i, _d in enumerate(major_ticks):
+        if i == len(major_ticks) - 1 and cutoff_month != 12:
+            major_labels.append(f"{cutoff_year}\n{cutoff_month}月")
+        else:
+            major_labels.append("")
+
+    minor_ticks = []
+    minor_labels = []
+    for i in range(len(major_ticks) - 1):
+        d1 = major_ticks[i]
+        d2 = major_ticks[i + 1]
+        mid = d1 + (d2 - d1) / 2
+        if d2.month == 12:
+            minor_ticks.append(mid)
+            minor_labels.append(str(d2.year))
+
+    ax.set_xticks(major_ticks)
+    ax.set_xticklabels(major_labels, fontsize=14, ha="center", color="black")
+    ax.set_xticks(minor_ticks, minor=True)
+    ax.set_xticklabels(minor_labels, minor=True, fontsize=14, ha="center", color="black")
+    ax.tick_params(axis="x", which="minor", length=0, labelcolor="black")
+    ax.tick_params(axis="x", which="major", labelcolor="black")
+
+    delta_days = 999
+    if len(points) >= 2:
+        delta_days = (points["date"].iloc[-1] - points["date"].iloc[-2]).days
+
+    ax.tick_params(axis="y", labelsize=14, labelcolor="black")
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{int(v):,}"))
     ax.set_ylim(bottom=0)
+
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.set_xlabel("西元(年)", fontweight="bold", fontsize=14)
-    ax.set_ylabel("人次", fontweight="bold", fontsize=14, rotation=0, labelpad=20)
 
-    # 繪製圓點
-    ax.plot(points["date"].to_numpy(), points["cumulative"].to_numpy(), linestyle="None", marker="o", markersize=6, color=line_color, zorder=5)
+    ax.set_xlabel("西元(年)", fontweight="bold", fontsize=18)
+    ax.set_ylabel("人次", fontweight="bold", fontsize=18, rotation=0, labelpad=40)
+    ax.yaxis.label.set_horizontalalignment("right")
+    ax.yaxis.label.set_verticalalignment("center")
+    ax.yaxis.set_label_coords(-0.09, 0.5)
 
-    # 標註數值
+    ax.plot(
+        points["date"].to_numpy(),
+        points["cumulative"].to_numpy(),
+        linestyle="None",
+        marker="o",
+        markersize=7,
+        color=line_color,
+        zorder=5,
+    )
+
     for i, r in points.iterrows():
-        ax.annotate(f"{int(r['cumulative']):,}", 
-                    xy=(r["date"], r["cumulative"]), 
-                    xytext=(0, 10), 
-                    textcoords="offset points", 
-                    ha="center", fontsize=11)
+        ha_val = "center"
+        va_val = "bottom"
+        xy_text_offset = (0, 13)
+
+        if len(points) >= 2 and delta_days < 100:
+            if i == len(points) - 2:
+                va_val = "top"
+                xy_text_offset = (0, -13)
+
+        ax.annotate(
+            f"{int(r['cumulative']):,}",
+            xy=(r["date"], r["cumulative"]),
+            xytext=xy_text_offset,
+            textcoords="offset points",
+            ha=ha_val,
+            va=va_val,
+            fontsize=14,
+        )
+
+    ax.set_xlim(
+        major_ticks[0] - pd.Timedelta(days=20),
+        tmp["date"].max() + pd.Timedelta(days=60),
+    )
 
     plt.tight_layout()
     return fig
